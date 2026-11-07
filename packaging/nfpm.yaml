@@ -1,0 +1,19 @@
+name: zmusic
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: sound
+priority: optional
+maintainer: yuanjing <yuanjing@yuanjing.art>
+description: 网易云音乐终端播放器（Rust / ratatui TUI）
+homepage: https://github.com/yuanjingINT/zmusic
+license: GPL-3.0-only
+contents:
+  - src: target/release/zmusic
+    dst: /usr/bin/zmusic
+  - src: LICENSE
+    dst: /usr/share/licenses/zmusic/LICENSE
+  - src: README.md
+    dst: /usr/share/doc/zmusic/README.md
+recommends:
+  - mpv
