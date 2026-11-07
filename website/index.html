@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>zmusic — 网易云音乐终端播放器</title>
+<meta name="description" content="zmusic 是一个基于 Rust 与 ratatui 构建的 Linux 终端网易云音乐播放器：搜索、推荐、下载、收藏与超级下载，一切在终端完成。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="#top">
+        <span class="brand-mark">Z</span>
+        <span class="brand-name">zmusic</span>
+      </a>
+      <nav class="nav">
+        <a href="#features">功能</a>
+        <a href="#install">安装</a>
+        <a href="#usage">使用</a>
+        <a href="#tech">技术</a>
+        <a class="nav-cta" href="https://github.com" target="_blank" rel="noopener">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- Hero -->
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-left">
+          <p class="eyebrow">00 — 介绍</p>
+          <h1 class="hero-title">
+            网易云音乐<br>
+            <span class="accent">在终端播放。</span>
+          </h1>
+          <p class="hero-lead">
+            zmusic 是一个用 Rust 编写的 Linux 终端音乐播放器。搜索、推荐、下载、收藏、超级下载，全部在你的终端里完成。没有 GUI，没有 Electron，只有键盘与音乐。
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#install">开始安装</a>
+            <a class="btn btn-ghost" href="#features">查看功能</a>
+          </div>
+          <div class="hero-meta">
+            <div><span class="meta-label">平台</span><span class="meta-value">Linux</span></div>
+            <div><span class="meta-label">界面</span><span class="meta-value">TUI / ratatui</span></div>
+            <div><span class="meta-label">语言</span><span class="meta-value">Rust 2021</span></div>
+            <div><span class="meta-label">版本</span><span class="meta-value">0.1.0</span></div>
+          </div>
+        </div>
+        <div class="hero-right">
+          <div class="terminal">
+            <div class="terminal-bar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="terminal-title">zmusic</span>
+            </div>
+            <pre class="terminal-body"><code><span class="t-dim">~ $</span> zmusic
+<span class="t-title"> zmusic · 主菜单</span>
+
+  1  搜索音乐
+  2  歌曲推荐
+  3  专辑推荐
+  4  歌单推荐
+  5  我的下载
+  6  我的收藏
+  7  超级下载
+  8  设置
+
+<span class="t-dim">▶ 稳 - 音乐人 · 00:42 / 03:15  vol 70</span>
+<span class="t-accent"> h菜单 s搜索 v歌词 Alt+Enter选择 d下载 l收藏 q退出</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" class="section">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">01 — 功能</p>
+          <h2>为音乐而生的终端工具。</h2>
+        </div>
+        <div class="feature-grid">
+          <article class="feature">
+            <span class="feature-num">01</span>
+            <h3>搜索与发现</h3>
+            <p>关键词搜索歌曲、歌单、专辑与艺人。推荐歌曲、新专、个性化歌单，全部来自网易云。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-num">02</span>
+            <h3>播放与歌词</h3>
+            <p>底层由 mpv 驱动，支持进度、暂停、切歌、音量。实时同步滚动歌词，含翻译。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-num">03</span>
+            <h3>下载与收藏</h3>
+            <p>批量下载选中歌曲到本地目录。收藏歌曲与歌单，随时回听。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-num">04</span>
+            <h3>超级下载</h3>
+            <p>插入 U 盘，一键格式化并填充热榜歌曲，离线音乐库自动就绪。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-num">05</span>
+            <h3>USB 设备</h3>
+            <p>自动检测 U 盘，挂载、测空余空间、下载位置可切换本地或 U 盘。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-num">06</span>
+            <h3>自动 API</h3>
+            <p>每次启动自动更新 NeteaseCloudMusicApiEnhanced 服务并重启，解灰逻辑已修补。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Install -->
+    <section id="install" class="section section-alt">
+      <div class="container install-grid">
+        <div>
+          <p class="eyebrow">02 — 安装</p>
+          <h2>三步即可运行。</h2>
+          <p class="section-lead">需要 Rust 工具链、Node.js 22+ 与 mpv。支持 Arch / Fedora 等 Linux 发行版。</p>
+        </div>
+        <div class="install-steps">
+          <div class="step">
+            <span class="step-num">01</span>
+            <div>
+              <h4>克隆仓库</h4>
+              <pre class="code"><code>git clone https://github.com/yourname/zmusic.git
+cd zmusic</code></pre>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">02</span>
+            <div>
+              <h4>编译并安装</h4>
+              <pre class="code"><code>./install.sh</code></pre>
+              <p class="step-note">编译 release 版本，安装 zmusic 命令与桌面启动器。</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">03</span>
+            <div>
+              <h4>启动</h4>
+              <pre class="code"><code>zmusic</code></pre>
+              <p class="step-note">首次启动自动安装并启动 API 服务。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Usage -->
+    <section id="usage" class="section">
+      <div class="container">
+        <div class="section-head">
+          <p class="eyebrow">03 — 快捷键</p>
+          <h2>键盘即界面。</h2>
+        </div>
+        <div class="key-grid">
+          <div class="key-row"><kbd>h</kbd><span>主菜单</span></div>
+          <div class="key-row"><kbd>s</kbd><span>搜索音乐</span></div>
+          <div class="key-row"><kbd>v</kbd><span>歌词视图</span></div>
+          <div class="key-row"><kbd>空格</kbd><span>暂停 / 播放</span></div>
+          <div class="key-row"><kbd>n / p</kbd><span>下一首 / 上一首</span></div>
+          <div class="key-row"><kbd>d</kbd><span>下载选中歌曲</span></div>
+          <div class="key-row"><kbd>l</kbd><span>收藏</span></div>
+          <div class="key-row"><kbd>x</kbd><span>移除收藏</span></div>
+          <div class="key-row"><kbd>Alt+Enter</kbd><span>多选切换</span></div>
+          <div class="key-row"><kbd>Esc</kbd><span>返回</span></div>
+          <div class="key-row"><kbd>q</kbd><span>退出</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tech -->
+    <section id="tech" class="section section-alt">
+      <div class="container tech-grid">
+        <div>
+          <p class="eyebrow">04 — 技术</p>
+          <h2>小而锋利。</h2>
+        </div>
+        <ul class="tech-list">
+          <li><span>Rust 2021</span><span>编译型，内存安全，启动毫秒级</span></li>
+          <li><span>ratatui 0.29</span><span>终端 UI 框架</span></li>
+          <li><span>crossterm 0.28</span><span>跨平台终端事件</span></li>
+          <li><span>reqwest (rustls)</span><span>HTTP 客户端，纯 Rust TLS</span></li>
+          <li><span>serde / serde_json</span><span>序列化与配置</span></li>
+          <li><span>mpv (IPC)</span><span>音频播放与进度同步</span></li>
+          <li><span>NeteaseCloudMusicApiEnhanced</span><span>网易云 API 服务</span></li>
+          <li><span>systemd --user</span><span>API 服务守护与自动更新</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <div>
+          <span class="brand-mark small">Z</span>
+          <span>zmusic — 终端里的网易云音乐</span>
+        </div>
+        <div class="footer-links">
+          <a href="#top">回到顶部</a>
+          <a href="#install">安装</a>
+          <a href="#usage">快捷键</a>
+        </div>
+        <p class="footer-note">瑞士国际主义风格 · International Typographic Style</p>
+      </div>
+    </footer>
+  </main>
+
+  <script src="assets/main.js"></script>
+</body>
+</html>

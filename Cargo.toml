@@ -1,0 +1,22 @@
+[package]
+name = "zmusic"
+version = "0.1.0"
+edition = "2021"
+description = "zmusic - NetEase Cloud Music terminal player for Linux"
+
+[[bin]]
+name = "zmusic"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+anyhow = "1"
+dirs = "6"
+unicode-width = "0.2"
+
+[profile.release]
+opt-level = 3
