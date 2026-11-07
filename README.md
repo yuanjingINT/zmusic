@@ -28,24 +28,23 @@ Linux x86_64 / aarch64。
 
 ## 安装
 
-### Arch Linux（自建仓库）
+### Arch Linux（自建仓库，公网）
 
-包由 CI 构建，放进自建的 pacman 仓库（`dito-repo`）。在 `/etc/pacman.conf` 里加：
+包由 CI 构建，发布在自建仓库 `repo.dito.asia`。在 `/etc/pacman.conf` 里加：
 
 ```ini
 [dito-repo]
-Server = http://192.168.1.20:8180/x86_64
-SigLevel = Required
+Server = https://repo.dito.asia/x86_64
+SigLevel = Optional
 ```
-
-然后：
 
 ```bash
 sudo pacman -Sy
 sudo pacman -S zmusic
 ```
 
-> `dito-repo` 是内网自建仓库（NAS 上，局域网地址），外网访问不到；换网络时把 `Server` 换成对应的可达地址即可。仓库里的包带签名（`SigLevel = Required`）。
+> 仓库走 HTTPS；`SigLevel = Optional` 是因为仓库签名密钥正在重签中，密钥就绪后会切成 `Required`（届时需要先 `pacman-key --add` 导入公钥）。
+> 内网可以直连 NAS：`Server = http://192.168.1.20:8180/x86_64`。
 
 ### 预编译包
 
