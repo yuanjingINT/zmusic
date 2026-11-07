@@ -30,21 +30,33 @@ Linux x86_64 / aarch64。
 
 ### Arch Linux（自建仓库，公网）
 
-包由 CI 构建，发布在自建仓库 `repo.dito.asia`。在 `/etc/pacman.conf` 里加：
+包由 CI 构建，发布在自建仓库 `repo.dito.asia`，包和数据库都用仓库密钥签名。
+
+一键安装（自动加源、导入并本地信任公钥）：
+
+```bash
+curl -fsSL https://repo.dito.asia/install-dito-repo.sh | sudo bash
+sudo pacman -S zmusic
+```
+
+手动加源：
 
 ```ini
 [dito-repo]
 Server = https://repo.dito.asia/x86_64
-SigLevel = Optional
+SigLevel = Required
 ```
 
 ```bash
+sudo pacman-key --add <(curl -fsSL https://repo.dito.asia/x86_64/dito-repo.pub)
+sudo pacman-key --lsign-key 6469F0BEB079C3EDCC47947627FEDD0D74F7D714
 sudo pacman -Sy
 sudo pacman -S zmusic
 ```
 
-> 仓库走 HTTPS；`SigLevel = Optional` 是因为仓库签名密钥正在重签中，密钥就绪后会切成 `Required`（届时需要先 `pacman-key --add` 导入公钥）。
-> 内网可以直连 NAS：`Server = http://192.168.1.20:8180/x86_64`。
+> 仓库密钥指纹 `6469 F0BE B079 C3ED CC47 9476 27FE DD0D 74F7 D714`（`Dito Arch Repo <repo@dito.local>`）。
+> 密钥在 2026-11-07 重签过：之前加过源的机器需要重跑一次上面的安装脚本，否则新包验签会失败。
+> 内网可直连 NAS 回落：`Server = http://192.168.1.20:8180/x86_64`。
 
 ### 预编译包
 
