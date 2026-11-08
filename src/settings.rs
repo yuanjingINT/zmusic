@@ -9,6 +9,12 @@ pub struct Settings {
     pub usb_mount: String,
     #[serde(default)]
     pub usb_device: String,
+    /// 音质（standard/higher/exhigh/lossless/hires），空表示没设过、沿用环境变量
+    #[serde(default)]
+    pub quality: String,
+    /// 播放顺序（sequential/shuffle/repeat_one）
+    #[serde(default)]
+    pub play_mode: String,
 }
 
 impl Settings {

@@ -109,6 +109,10 @@ impl Player {
         let _ = self.tx.send(MpvCmd::SeekRel(s));
     }
 
+    pub fn seek_abs(&self, s: f64) {
+        let _ = self.tx.send(MpvCmd::SeekAbs(s));
+    }
+
     pub fn volume(&self, delta: i32) {
         let _ = self.tx.send(MpvCmd::Volume(delta));
     }

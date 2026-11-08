@@ -1,6 +1,7 @@
 pub mod screens;
 mod hints;
 mod nav;
+mod playback;
 mod search_keys;
 mod theme;
 
@@ -13,6 +14,7 @@ use crate::player::Player;
 use crate::settings::Settings;
 use crate::superdl::{self, UsbDevice};
 use nav::NavStack;
+use playback::PlayMode;
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -141,6 +143,11 @@ pub struct App {
     fav_sel: usize,
     fav_view: usize,
 
+    song_cfg_open: bool,
+    song_cfg_sel: usize,
+    play_mode: PlayMode,
+    pending_seek: Option<f64>,
+
     ctx_open: bool,
     ctx_kind: u8,
     ctx_song: Option<Song>,
@@ -176,6 +183,11 @@ impl App {
     pub fn new(cfg: Config, api: ApiClient, player: Player, downloader: Downloader) -> Self {
         let favorites = Favorites::load(&cfg.favorites_path);
         let settings = Settings::load(&cfg.settings_path);
+        let mut cfg = cfg;
+        if !settings.quality.is_empty() {
+            cfg.quality = settings.quality.clone();
+        }
+        let play_mode = PlayMode::parse(&settings.play_mode);
         let (tx, rx) = channel();
         let mut app = App {
             cfg,
@@ -213,6 +225,11 @@ impl App {
             lib_sel: 0,
             fav_sel: 0,
             fav_view: 0,
+            song_cfg_open: false,
+            song_cfg_sel: 0,
+            play_mode,
+            pending_seek: None,
+
             ctx_open: false,
             ctx_kind: 0,
             ctx_song: None,
@@ -592,7 +609,13 @@ impl App {
                 AppMsg::PlayUrl(gen, url) => {
                     if gen == self.play_gen {
                         match url {
-                            Some(u) => self.player.load(&u),
+                            Some(u) => {
+                                self.player.load(&u);
+                                // 切音质重取 URL 后，尽量回到原来的位置
+                                if let Some(pos) = self.pending_seek.take() {
+                                    self.player.seek_abs(pos);
+                                }
+                            }
                             None => {
                                 let name = self
                                     .now_playing
@@ -914,6 +937,22 @@ impl App {
             }
             return;
         }
+        // 当前歌曲设置弹窗：模态，打开时其它按键一律不穿透
+        if self.song_cfg_open {
+            let n = self.song_cfg_items().len();
+            match k.code {
+                KeyCode::Esc => self.song_cfg_open = false,
+                KeyCode::Up | KeyCode::Char('k') if n > 0 => {
+                    self.song_cfg_sel = (self.song_cfg_sel + n - 1) % n;
+                }
+                KeyCode::Down | KeyCode::Char('j') if n > 0 => {
+                    self.song_cfg_sel = (self.song_cfg_sel + 1) % n;
+                }
+                KeyCode::Enter => self.song_cfg_apply(),
+                _ => {}
+            }
+            return;
+        }
         // 搜索页焦点两态：输入栏 / 结果列表。Tab 只切焦点，不再兼做切类型。
         if self.screen == ScreenKind::Search {
             match search_keys::nav(&k, self.search_input_focus) {
@@ -984,6 +1023,14 @@ impl App {
             KeyCode::Char('l') => self.favorite_selected(),
             KeyCode::Char('x') => self.remove_favorite(),
             KeyCode::Char('A') => self.open_album_of_selected(),
+            KeyCode::Char('i') => {
+                if self.now_playing.is_some() {
+                    self.song_cfg_open = true;
+                    self.song_cfg_sel = 0;
+                } else {
+                    self.toast = Some(("还没有在播放的歌曲".to_string(), Instant::now()));
+                }
+            }
             KeyCode::Char('t') => {
                 if self.screen == ScreenKind::Favorites {
                     self.fav_view ^= 1;
@@ -1052,6 +1099,83 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    const QUALITIES: [&'static str; 5] =
+        ["standard", "higher", "exhigh", "lossless", "hires"];
+
+    fn song_cfg_items(&self) -> Vec<String> {
+        let Some(song) = &self.now_playing else {
+            return vec!["当前没有播放中的歌曲".to_string()];
+        };
+        let fav = if self.favorites.contains(song.id) {
+            "已收藏"
+        } else {
+            "未收藏"
+        };
+        vec![
+            format!("收藏 / 取消收藏    {}", fav),
+            "下载这首".to_string(),
+            format!("音质    {}", self.cfg.quality),
+            format!("播放顺序    {}", self.play_mode.label()),
+        ]
+    }
+
+    fn song_cfg_apply(&mut self) {
+        let Some(song) = self.now_playing.clone() else {
+            return;
+        };
+        match self.song_cfg_sel {
+            0 => {
+                if self.favorites.contains(song.id) {
+                    let mut ids = HashSet::new();
+                    ids.insert(song.id);
+                    self.favorites.remove_ids(&ids);
+                    self.favorites.save(&self.cfg.favorites_path);
+                    self.toast = Some((format!("已取消收藏 {}", song.name), Instant::now()));
+                } else {
+                    self.favorites.add(std::slice::from_ref(&song));
+                    self.favorites.save(&self.cfg.favorites_path);
+                    self.toast = Some((format!("已收藏 {}", song.name), Instant::now()));
+                }
+            }
+            1 => {
+                let n = self.downloader.enqueue(vec![song]);
+                self.toast = Some((
+                    if n > 0 { "已加入下载队列".to_string() } else { "已在下载队列".to_string() },
+                    Instant::now(),
+                ));
+            }
+            2 => {
+                let cur = Self::QUALITIES
+                    .iter()
+                    .position(|q| *q == self.cfg.quality)
+                    .unwrap_or(2);
+                let next = Self::QUALITIES[(cur + 1) % Self::QUALITIES.len()];
+                self.cfg.quality = next.to_string();
+                self.settings.quality = next.to_string();
+                self.settings.save(&self.cfg.settings_path);
+                self.toast = Some((format!("音质切到 {}，重新取流", next), Instant::now()));
+                self.reload_for_quality();
+            }
+            3 => {
+                self.play_mode = self.play_mode.next();
+                self.settings.play_mode = self.play_mode.as_str().to_string();
+                self.settings.save(&self.cfg.settings_path);
+                self.toast = Some((format!("播放顺序: {}", self.play_mode.label()), Instant::now()));
+            }
+            _ => {}
+        }
+    }
+
+    /// 音质变了要重新取 URL；记下当前位置，新流加载后跳回去
+    fn reload_for_quality(&mut self) {
+        if self.queue_idx.is_none() {
+            return;
+        }
+        self.pending_seek = self.player.state().time_pos;
+        self.play_gen += 1;
+        self.play_current();
     }
 
     /// 查询串长度上限：长按/粘贴不会把界面卡死，也不会把 API 请求撑爆

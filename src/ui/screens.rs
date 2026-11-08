@@ -31,6 +31,7 @@ pub fn render_all(f: &mut Frame, app: &mut App) {
         crate::ui::ScreenKind::Settings => render_settings(f, content, app),
     }
     render_ctx_menu(f, app);
+    render_song_cfg(f, app);
     render_bottom(f, bottom, app);
 }
 
@@ -121,6 +122,39 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_style(theme::highlight())
         .highlight_symbol("▸ ");
     f.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_song_cfg(f: &mut Frame, app: &mut App) {
+    if !app.song_cfg_open {
+        return;
+    }
+    let items = app.song_cfg_items();
+    let area = f.area();
+    let w = 52u16.min(area.width);
+    let h = (items.len() as u16 + 2).min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect::new(x, y, w, h);
+    f.render_widget(ratatui::widgets::Clear, rect);
+
+    let rows: Vec<ListItem> = items
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let style = if i == app.song_cfg_sel {
+                theme::highlight()
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(Span::styled(format!(" {} ", s), style)))
+        })
+        .collect();
+    let menu = List::new(rows).block(
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .title(Span::styled(" 当前歌曲 · Enter 应用 / Esc 关闭 ", theme::title())),
+    );
+    f.render_widget(menu, rect);
 }
 
 fn render_ctx_menu(f: &mut Frame, app: &mut App) {
