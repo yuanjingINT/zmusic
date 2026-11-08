@@ -20,9 +20,10 @@ use std::io::stdout;
 fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load();
     let api = api::ApiClient::new(cfg.api_base.clone());
+    let quality = std::sync::Arc::new(std::sync::RwLock::new(cfg.quality.clone()));
     let downloader = downloader::Downloader::new(
         cfg.download_dir.clone(),
-        cfg.quality.clone(),
+        quality.clone(),
         cfg.api_base.clone(),
     );
     let player = player::Player::start()?;
@@ -33,7 +34,7 @@ fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = ui::App::new(cfg, api, player, downloader);
+    let mut app = ui::App::new(cfg, api, player, downloader, quality);
     let res = app.run(&mut terminal);
 
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;

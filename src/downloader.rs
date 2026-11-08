@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -52,7 +52,6 @@ pub struct DownloadState {
 struct Job {
     songs: Vec<Song>,
     dir: PathBuf,
-    quality: String,
     base: String,
 }
 
@@ -60,12 +59,11 @@ pub struct Downloader {
     shared: Arc<Mutex<DownloadState>>,
     tx: Sender<Job>,
     dir: Arc<Mutex<PathBuf>>,
-    quality: String,
     base: String,
 }
 
 impl Downloader {
-    pub fn new(dir: PathBuf, quality: String, base: String) -> Self {
+    pub fn new(dir: PathBuf, quality: Arc<RwLock<String>>, base: String) -> Self {
         let (tx, rx) = channel();
         let shared = Arc::new(Mutex::new(DownloadState { tasks: Vec::new() }));
         let dir = Arc::new(Mutex::new(dir));
@@ -73,13 +71,13 @@ impl Downloader {
         for _ in 0..WORKERS {
             let rx = rx.clone();
             let sh = shared.clone();
-            thread::spawn(move || worker(rx, sh));
+            let q = quality.clone();
+            thread::spawn(move || worker(rx, sh, q));
         }
         Downloader {
             shared,
             tx,
             dir,
-            quality,
             base,
         }
     }
@@ -111,7 +109,6 @@ impl Downloader {
                 let job = Job {
                     songs: chunk.to_vec(),
                     dir: cur_dir.clone(),
-                    quality: self.quality.clone(),
                     base: self.base.clone(),
                 };
                 let _ = self.tx.send(job);
@@ -140,7 +137,11 @@ fn set_status(shared: &Arc<Mutex<DownloadState>>, id: i64, status: DlStatus) {
     }
 }
 
-fn worker(rx: Arc<Mutex<Receiver<Job>>>, shared: Arc<Mutex<DownloadState>>) {
+fn worker(
+    rx: Arc<Mutex<Receiver<Job>>>,
+    shared: Arc<Mutex<DownloadState>>,
+    quality: Arc<RwLock<String>>,
+) {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
@@ -150,7 +151,7 @@ fn worker(rx: Arc<Mutex<Receiver<Job>>>, shared: Arc<Mutex<DownloadState>>) {
         match job {
             Ok(job) => {
                 for song in &job.songs {
-                    process(&client, song, &job, &shared);
+                    process(&client, song, &job, &shared, &quality);
                 }
             }
             Err(_) => break,
@@ -158,9 +159,17 @@ fn worker(rx: Arc<Mutex<Receiver<Job>>>, shared: Arc<Mutex<DownloadState>>) {
     }
 }
 
-fn process(client: &reqwest::blocking::Client, song: &Song, job: &Job, shared: &Arc<Mutex<DownloadState>>) {
+fn process(
+    client: &reqwest::blocking::Client,
+    song: &Song,
+    job: &Job,
+    shared: &Arc<Mutex<DownloadState>>,
+    quality: &Arc<RwLock<String>>,
+) {
     set_status(shared, song.id, DlStatus::Resolving);
-    let url = match resolve_url(client, &job.base, song.id, &job.quality) {
+    // 每个任务发起时读当前音质：队列里已排队的任务也会用上最新设置
+    let level = quality.read().unwrap().clone();
+    let url = match resolve_url(client, &job.base, song.id, &level) {
         Ok(Some(u)) => u,
         Ok(None) => {
             set_status(shared, song.id, DlStatus::Failed("无播放链接".to_string()));
@@ -229,4 +238,101 @@ fn download_to(
     drop(f);
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    /// 起一个只认 /song/url/v1 和 /audio.mp3 的本地桩，记录每次请求的 level
+    fn stub_api(levels: Arc<Mutex<Vec<String>>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let base_for_thread = base.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut sock) = stream else { break };
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut h = String::new();
+                    match reader.read_line(&mut h) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if h == "\r\n" => break,
+                        Ok(_) => {}
+                    }
+                }
+                let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let body = if path.starts_with("/song/url/v1") {
+                    if let Some(rest) = path.split("level=").nth(1) {
+                        levels
+                            .lock()
+                            .unwrap()
+                            .push(rest.split('&').next().unwrap_or("").to_string());
+                    }
+                    format!("{{\"data\":[{{\"url\":\"{}/audio.mp3\"}}]}}", base_for_thread)
+                } else {
+                    "ID3fake-audio-bytes".to_string()
+                };
+                let _ = write!(
+                    sock,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+            }
+        });
+        base
+    }
+
+    fn wait_done(d: &Downloader, expect: usize) {
+        for _ in 0..100 {
+            let (total, done, skipped, failed) = d.counts();
+            if failed > 0 {
+                panic!("有任务失败: {:?}", d.snapshot());
+            }
+            if done + skipped >= expect && total >= expect {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("超时：{:?}", d.snapshot());
+    }
+
+    fn song(id: i64, name: &str) -> Song {
+        Song {
+            id,
+            name: name.to_string(),
+            ar: Vec::new(),
+            al: Default::default(),
+            dt: 0,
+            fee: 0,
+        }
+    }
+
+    #[test]
+    fn changing_quality_after_enqueue_affects_next_request() {
+        let levels = Arc::new(Mutex::new(Vec::new()));
+        let base = stub_api(levels.clone());
+        let dir = std::env::temp_dir().join(format!("zmusic-dl-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let quality = Arc::new(RwLock::new("exhigh".to_string()));
+        let dl = Downloader::new(dir, quality.clone(), base);
+
+        dl.enqueue(vec![song(1, "第一首")]);
+        wait_done(&dl, 1);
+
+        *quality.write().unwrap() = "hires".to_string();
+        dl.enqueue(vec![song(2, "第二首")]);
+        wait_done(&dl, 2);
+
+        let got = levels.lock().unwrap().clone();
+        assert_eq!(got.first().map(String::as_str), Some("exhigh"));
+        assert_eq!(got.last().map(String::as_str), Some("hires"), "改音质后下载请求应跟着变");
+    }
 }

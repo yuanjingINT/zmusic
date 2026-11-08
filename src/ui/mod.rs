@@ -24,6 +24,7 @@ use ratatui::Terminal;
 use std::collections::HashSet;
 use std::io::Stdout;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -103,6 +104,8 @@ pub struct App {
     api: ApiClient,
     player: Player,
     downloader: Downloader,
+    /// 与下载器共享的音质，弹窗里改完两边同时生效
+    quality: Arc<RwLock<String>>,
     favorites: Favorites,
     tx: Sender<AppMsg>,
     rx: Receiver<AppMsg>,
@@ -181,7 +184,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cfg: Config, api: ApiClient, player: Player, downloader: Downloader) -> Self {
+    pub fn new(
+        cfg: Config,
+        api: ApiClient,
+        player: Player,
+        downloader: Downloader,
+        quality: Arc<RwLock<String>>,
+    ) -> Self {
         let favorites = Favorites::load(&cfg.favorites_path);
         let settings = Settings::load(&cfg.settings_path);
         let mut cfg = cfg;
@@ -189,12 +198,15 @@ impl App {
             cfg.quality = settings.quality.clone();
         }
         let play_mode = PlayMode::parse(&settings.play_mode);
+        // settings 里的音质可能覆盖了环境变量，共享给下载器
+        *quality.write().unwrap() = cfg.quality.clone();
         let (tx, rx) = channel();
         let mut app = App {
             cfg,
             api,
             player,
             downloader,
+            quality,
             favorites,
             tx,
             rx,
@@ -1174,6 +1186,7 @@ impl App {
                     .unwrap_or(2);
                 let next = Self::QUALITIES[(cur + 1) % Self::QUALITIES.len()];
                 self.cfg.quality = next.to_string();
+                *self.quality.write().unwrap() = next.to_string();
                 self.settings.quality = next.to_string();
                 self.settings.save(&self.cfg.settings_path);
                 self.toast = Some((format!("音质切到 {}，重新取流", next), Instant::now()));
