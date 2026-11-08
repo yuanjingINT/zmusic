@@ -25,6 +25,8 @@ const SEARCH_LIMIT: usize = 10;
 
 pub struct YouTubeSource {
     exe: String,
+    /// yt-dlp 的 --proxy；和 mpv 用同一个出口，否则流地址会 403
+    proxy: Option<String>,
     /// query -> (写入时间, 搜索结果)
     cache: Mutex<HashMap<String, (Instant, Vec<Song>)>>,
     /// 探活结果缓存：避免每次搜索都跑 `--version`
@@ -37,8 +39,13 @@ impl YouTubeSource {
     }
 
     pub fn with_exe(exe: &str) -> Self {
+        Self::with_proxy(exe, None)
+    }
+
+    pub fn with_proxy(exe: &str, proxy: Option<String>) -> Self {
         YouTubeSource {
             exe: exe.to_string(),
+            proxy,
             cache: Mutex::new(HashMap::new()),
             available: Mutex::new(None),
         }
@@ -46,8 +53,14 @@ impl YouTubeSource {
 
     /// 跑一条 yt-dlp 命令，带超时和输出收集。
     fn run(&self, args: &[&str], timeout: Duration) -> Result<String> {
+        let mut full: Vec<&str> = Vec::with_capacity(args.len() + 2);
+        if let Some(p) = &self.proxy {
+            full.push("--proxy");
+            full.push(p);
+        }
+        full.extend_from_slice(args);
         let mut child = Command::new(&self.exe)
-            .args(args)
+            .args(&full)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

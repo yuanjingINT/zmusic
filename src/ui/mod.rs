@@ -90,7 +90,7 @@ pub(crate) enum AppMsg {
         resp: Sender<Result<(), String>>,
     },
     Enqueue(Result<Vec<Song>, String>),
-    PlayUrl(u64, Option<String>, bool),
+    PlayUrl(u64, Option<String>, bool, Option<String>),
     Lyric(u64, Option<Lyrics>),
 }
 
@@ -646,8 +646,10 @@ impl App {
                     Ok(v) => self.enqueue_songs(v),
                     Err(e) => self.toast = Some((format!("获取歌单曲目失败: {}", e), Instant::now())),
                 },
-                AppMsg::PlayUrl(gen, url, autoplay) => {
+                AppMsg::PlayUrl(gen, url, autoplay, proxy) => {
                     if gen == self.play_gen {
+                        // mpv 的 http-proxy 按曲目切：YouTube 走代理，网易云清空
+                        self.player.set_http_proxy(proxy.as_deref());
                         match url {
                             Some(u) => {
                                 if autoplay {
@@ -1521,12 +1523,18 @@ impl App {
             song.source.clone()
         };
         let track = crate::source::track_of(&song);
+        // YouTube 的直链绑出口 IP：mpv 必须和 yt-dlp 走同一代理；其它源一律直连
+        let mpv_proxy = if source == "youtube" {
+            crate::proxy::mpv_proxy(self.cfg.proxy.as_deref()).ok().flatten()
+        } else {
+            None
+        };
         spawn(tx.clone(), move || {
             let url = registry
                 .stream_url(&source, &track, &quality)
                 .ok()
                 .flatten();
-            AppMsg::PlayUrl(gen, url, autoplay)
+            AppMsg::PlayUrl(gen, url, autoplay, mpv_proxy)
         });
         let api2 = self.api.clone();
         spawn(tx, move || {

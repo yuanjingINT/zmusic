@@ -120,6 +120,7 @@ sudo apt install build-essential pkg-config libssl-dev
 | `NCM_API` | `http://127.0.0.1:3000` | 网易云 API 地址 |
 | `NCM_DIR` | `~/Music/ncm` | 下载目录 |
 | `NCM_QUALITY` | `exhigh` | 音质：`standard` / `higher` / `exhigh` / `lossless` / `hires` |
+| `ZMUSIC_PROXY` | 空 | 可选代理，如 `socks5h://127.0.0.1:11080`；YouTube 源必需，见下 |
 
 运行时会写：
 
@@ -128,6 +129,27 @@ sudo apt install build-essential pkg-config libssl-dev
 ~/.config/zmusic/settings.json    界面与播放设置
 ```
 
+### YouTube 源与代理
+
+`S` 键在搜索页切换音乐源（网易云 / YouTube）。YouTube 走 `yt-dlp`，**国内直连不通，需要代理**：
+
+```bash
+# 例：借一台海外机器开 SOCKS5
+ssh -f -N -D 127.0.0.1:11080 your-vps
+ZMUSIC_PROXY=socks5h://127.0.0.1:11080 zmusic
+```
+
+关键约束：**zmusic 与 mpv 必须走同一个出口**。googlevideo 的直链把签名绑在出口 IP 上，
+换 IP 就 403。具体实现：
+
+- `yt-dlp` 侧直接收 `--proxy`
+- mpv 的 `--http-proxy` 只认 HTTP 代理，不认 SOCKS；所以配成 `socks5(h)://` 时，
+  zmusic 会在本机起一个只监听 `127.0.0.1` 的小桥（HTTP CONNECT → SOCKS5），
+  只给 YouTube 曲目用；播放网易云时会自动清空，回到直连
+- 配成 `http://…` 时原样交给 mpv，不起桥
+
+`yt-dlp` 不在 PATH、代理挂了、或超时：YouTube 那一路报错并置灰，网易云不受影响。
+
 ## 快捷键
 
 | 键 | 作用 |
@@ -135,6 +157,7 @@ sudo apt install build-essential pkg-config libssl-dev
 | `h` | 回主菜单 |
 | `s` | 搜索 |
 | `Tab` | 搜索页：输入栏 ↔ 结果列表 切换焦点 |
+| `S` | 搜索页：切换音乐源（网易云 / YouTube） |
 | `F1`–`F4` / `Alt+0`–`3` | 搜索页：切搜索类型（歌曲 / 歌手 / 歌单 / 专辑），两种焦点下都可用 |
 | `g` | 下载列表 |
 | `v` | 正在播放界面 |

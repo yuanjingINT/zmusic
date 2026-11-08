@@ -25,6 +25,8 @@ pub enum MpvCmd {
     LoadPlay(String),
     /// 只加载，保持当前暂停状态：用于手动切歌、切音质重取流
     Load(String),
+    /// 设置/清空 mpv 的 http-proxy（YouTube 流要走和 yt-dlp 相同的出口）
+    SetProxy(String),
     Pause(bool),
     Toggle,
     SeekRel(f64),
@@ -120,6 +122,11 @@ impl Player {
         let _ = self.tx.send(MpvCmd::SeekRel(s));
     }
 
+    /// 设置 mpv 的 http-proxy；传 None 表示清空（回到直连）
+    pub fn set_http_proxy(&self, proxy: Option<&str>) {
+        let _ = self.tx.send(MpvCmd::SetProxy(proxy.unwrap_or("").to_string()));
+    }
+
     pub fn seek_abs(&self, s: f64) {
         let _ = self.tx.send(MpvCmd::SeekAbs(s));
     }
@@ -166,6 +173,9 @@ fn ipc_loop(mut stream: UnixStream, rx: Receiver<MpvCmd>, state: Arc<Mutex<MpvSt
                         // keep-open 下播完一首会停在暂停态，自动连播只 loadfile 不会出声，
                         // 这里显式解暂停
                         let _ = send_cmd(&mut stream, &["set_property", "pause", "no"], &mut rid);
+                    }
+                    MpvCmd::SetProxy(p) => {
+                        let _ = send_cmd(&mut stream, &["set_property", "http-proxy", &p], &mut rid);
                     }
                     MpvCmd::Pause(b) => {
                         let _ = send_cmd(

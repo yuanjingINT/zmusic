@@ -9,7 +9,8 @@ license=('GPL-3.0-only')
 depends=('gcc-libs' 'openssl')
 makedepends=('cargo' 'rust')
 optdepends=('mpv: 音频播放'
-            'nodejs: 网易云 API 服务（setup.sh 需要 Node >= 22）')
+            'nodejs: 网易云 API 服务（setup.sh 需要 Node >= 22）'
+            'yt-dlp: YouTube 源搜索与播放（需要代理）')
 
 # 源码固定到 GitLab 上**已推送**的 commit 归档（本地未推的 commit 会 404）。
 # 发版时把 _commit 换成要发的那一版，并重算 sha256sums：
