@@ -3,6 +3,7 @@ mod nav;
 mod playback;
 pub mod screens;
 mod search_keys;
+mod status;
 mod theme;
 
 use crate::config::Config;
@@ -152,8 +153,11 @@ pub struct App {
     agg_failed: Vec<String>,
     /// 搜索代数：切源/新搜索后旧结果直接丢
     search_gen: u64,
-    /// 源列表是否显示离线的（V 键切换）
+    /// 源列表是否显示离线的（S 循环范围）
     show_all_sources: bool,
+    /// 搜索页当前看的是源状态明细（V 切换），还是搜索结果
+    show_source_list: bool,
+    source_sel: usize,
     /// 已经补过时长的曲目，避免重复请求
     duration_asked: std::collections::HashSet<String>,
     /// 聚合去重后，每一行被哪些源命中（来源列显示「网易云+QQ(直连)」）
@@ -274,6 +278,8 @@ impl App {
             agg_failed: Vec::new(),
             search_gen: 0,
             show_all_sources: false,
+            show_source_list: false,
+            source_sel: 0,
             duration_asked: std::collections::HashSet::new(),
             agg_sources: std::collections::HashMap::new(),
             bad_songs: std::collections::HashSet::new(),
@@ -882,6 +888,7 @@ impl App {
             ScreenKind::Playlists => self.playlists.len(),
             ScreenKind::Songs => self.songs.len(),
             ScreenKind::Albums => self.albums.len(),
+            ScreenKind::Search if self.source_view_active() => self.registry.len(),
             ScreenKind::Search => match self.search_type {
                 0 => self.search.len(),
                 1 => self.search_artists.len(),
@@ -1186,6 +1193,17 @@ impl App {
             }
             return;
         }
+        // 搜索页 R：随时重探（大写 R，避免和小写搜索词冲突）
+        if k.code == KeyCode::Char('R') {
+            self.reprobe_with_toast();
+            return;
+        }
+        // 搜索页 V：随时切换「搜索结果 ↔ 源状态明细」，输入框聚焦时也生效
+        if self.screen == ScreenKind::Search && k.code == KeyCode::Char('V') {
+            self.show_source_list = !self.show_source_list;
+            self.source_sel = 0;
+            return;
+        }
         // 搜索页焦点两态：输入栏 / 结果列表。Tab 只切焦点，不再兼做切类型。
         if self.screen == ScreenKind::Search {
             match search_keys::nav(&k, self.search_input_focus) {
@@ -1203,20 +1221,7 @@ impl App {
                 }
                 search_keys::Nav::None => {}
             }
-            // 列表聚焦时 R/V 是全局动作（输入栏聚焦时它们是普通字符，不抢）
-            if !self.search_input_focus {
-                match k.code {
-                    KeyCode::Char('R') => {
-                        self.reprobe_with_toast();
-                        return;
-                    }
-                    KeyCode::Char('V') => {
-                        self.toggle_show_all_sources();
-                        return;
-                    }
-                    _ => {}
-                }
-            }
+            // R 已在上面全局处理，这里只剩 V（切视图）
             // 列表聚焦时直接打字：回焦输入栏并插入，避免“打字丢字”
             if !self.search_input_focus {
                 if let Some(c) = search_keys::printable_to_input(&k) {
@@ -1252,10 +1257,9 @@ impl App {
                 self.activate_menu();
             }
             KeyCode::Char('R') => self.reprobe_with_toast(),
-            KeyCode::Char('V') => {
-                if self.screen == ScreenKind::Search {
-                    self.toggle_show_all_sources();
-                }
+            // 搜索页：S 循环的范围（只看可用 / 连离线的也放进来）
+            KeyCode::Char('a') if self.screen == ScreenKind::Search => {
+                self.toggle_show_all_sources();
             }
             KeyCode::Char('g') => self.goto(ScreenKind::Downloads),
             KeyCode::Char('v') => {
@@ -1482,6 +1486,8 @@ impl App {
     }
 
     fn do_search(&mut self, q: String) {
+        self.show_source_list = false;
+        self.source_sel = 0;
         if self.source_id == AGGREGATE_ID {
             self.aggregate_search(q);
             return;
@@ -1763,6 +1769,7 @@ impl App {
             ScreenKind::Playlists => &mut self.playlists_sel,
             ScreenKind::Songs => &mut self.songs_sel,
             ScreenKind::Albums => &mut self.albums_sel,
+            ScreenKind::Search if self.source_view_active() => &mut self.source_sel,
             ScreenKind::Search => &mut self.search_sel,
             ScreenKind::Library => &mut self.lib_sel,
             ScreenKind::Favorites => &mut self.fav_sel,
@@ -1774,6 +1781,75 @@ impl App {
         if self.screen == ScreenKind::Search {
             self.lazy_duration_of_selected();
         }
+    }
+
+    /// 搜索页是否在「源状态明细」视图：手动 V 切过去，或者结果为空时默认看它
+    pub(crate) fn source_view_active(&self) -> bool {
+        self.show_source_list || (self.search_type == 0 && self.search.is_empty())
+    }
+
+    /// 每源一句话原因：只靠已缓存的探活状态与配置推断，不发网络请求
+    pub(crate) fn source_reason(&self, it: &status::Item) -> String {
+        let meting = it.id.starts_with("meting:");
+        match it.state {
+            SourceState::Ok if it.only_search => "仅搜索（无 cookie）".to_string(),
+            SourceState::Ok => "ok".to_string(),
+            SourceState::Probing => "探测中…".to_string(),
+            SourceState::Unknown => "未探测".to_string(),
+            SourceState::NeedsCreds => {
+                if it.id == "jamendo" {
+                    "缺 client_id".to_string()
+                } else if meting {
+                    "侧车未启动（或未配 cookie）".to_string()
+                } else {
+                    "缺凭据".to_string()
+                }
+            }
+            SourceState::Down => {
+                if meting {
+                    "侧车未启动".to_string()
+                } else if matches!(it.id.as_str(), "youtube" | "soundcloud")
+                    && self.cfg.proxy.is_none()
+                {
+                    "代理未配置".to_string()
+                } else {
+                    "不可用".to_string()
+                }
+            }
+        }
+    }
+
+    /// 搜索页状态行的数据：按优先级（= 注册顺序）列源，只读探活缓存，不发请求
+    pub(crate) fn source_status_items(&self) -> Vec<status::Item> {
+        self.registry
+            .all()
+            .iter()
+            .map(|s| {
+                let id = s.id();
+                let st = self.health.state(id);
+                status::Item {
+                    id: id.to_string(),
+                    label: crate::source::source_display(id),
+                    state: st,
+                    current: self.source_id == id,
+                    only_search: st.is_ok() && !s.capabilities().can_stream,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn health_ok_count(&self) -> usize {
+        self.health.ok_count()
+    }
+
+    /// 状态行末尾：探测中给进度，否则给可用计数
+    pub(crate) fn source_status_suffix(&self) -> String {
+        status::suffix(
+            self.probe_started.is_some(),
+            self.probe_done,
+            self.probe_total,
+            self.health.ok_count(),
+        )
     }
 
     /// 列表里的来源短名 + 能不能出流（聚合模式的「源」列用）
@@ -1958,6 +2034,10 @@ impl App {
     }
 
     fn enter_search_result(&mut self) {
+        // 源状态明细视图里 Enter 不做操作
+        if self.source_view_active() {
+            return;
+        }
         match self.search_type {
             0 => {
                 if self.search_sel < self.search.len() {

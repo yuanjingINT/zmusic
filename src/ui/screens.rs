@@ -529,7 +529,14 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
     ));
     f.render_widget(Paragraph::new(Line::from(spans)), type_area);
     if app.search_loading {
-        render_center(f, list_area, "搜索中...");
+        // 探测还在跑时把进度也带上，别只显示一个「搜索中」
+        let msg = format!("{} → 搜索中…", app.source_status_suffix());
+        render_center(f, list_area, &msg);
+        return;
+    }
+    // 结果为空、或按 V 切过来时，整块显示逐行的源状态明细
+    if app.source_view_active() {
+        render_source_details(f, list_area, app);
         return;
     }
     match app.search_type {
@@ -543,13 +550,19 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
                 return;
             }
             let tag = |s: &crate::models::Song| app.source_badge(s);
+            // 源连通性摘要收在列表块标题行右侧
+            let title = format!(
+                "搜索结果   源 {}/{}",
+                app.health_ok_count(),
+                app.registry.len()
+            );
             render_song_table(
                 f,
                 list_area,
                 &app.search,
                 app.search_sel,
                 &app.selected,
-                "搜索结果",
+                &title,
                 Some(&tag),
             );
         }
@@ -750,6 +763,44 @@ fn render_favorites(f: &mut Frame, area: Rect, app: &mut App) {
         &title,
         Some(&tag),
     );
+}
+
+/// 列表区里的逐行源状态：`● 网易云音乐  ok`、`○ YouTube  代理未配置`，末尾给汇总。
+fn render_source_details(f: &mut Frame, area: Rect, app: &mut App) {
+    use crate::ui::status::{self, Tone};
+    let items = app.source_status_items();
+    let suffix = app.source_status_suffix();
+    let width = area.width.saturating_sub(2) as usize; // 去掉边框
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(Span::styled(" 源状态 ", theme::title()));
+    let mut rows: Vec<ListItem> = Vec::with_capacity(items.len() + 2);
+    for (i, it) in items.iter().enumerate() {
+        let reason = app.source_reason(it);
+        let line = status::truncate(&status::detail_line(it, &reason), width);
+        let mut style = match status::tone_of(it) {
+            Tone::Good => theme::good(),
+            Tone::Warn => theme::warn(),
+            Tone::Dim => theme::dim(),
+        };
+        if it.current || i == app.source_sel {
+            style = style.add_modifier(ratatui::style::Modifier::BOLD);
+            if it.current {
+                style = style.add_modifier(ratatui::style::Modifier::REVERSED);
+            }
+        }
+        rows.push(ListItem::new(Line::from(Span::styled(line, style))));
+    }
+    rows.push(ListItem::new(Line::from(Span::styled(
+        status::truncate(&format!("{suffix} · R 重探 · V 返回结果"), width),
+        theme::dim(),
+    ))));
+    let mut state = ListState::default();
+    if !items.is_empty() {
+        state.select(Some(app.source_sel.min(items.len() - 1)));
+    }
+    let list = List::new(rows).block(block);
+    f.render_stateful_widget(list, area, &mut state);
 }
 
 /// 聚合列表的「源」列：短名 + 能不能出流
