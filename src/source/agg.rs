@@ -70,9 +70,10 @@ impl Cache {
         }
     }
 
-    pub fn get(&self, source: &str, query: &str) -> Option<SearchResult> {
+    pub fn get(&self, source: &str, query: &str, kind: &str) -> Option<SearchResult> {
         let map = self.map.lock().unwrap();
-        let (at, v) = map.get(&(source.to_string(), query.to_string()))?;
+        let key = (format!("{source}|{kind}"), query.to_string());
+        let (at, v) = map.get(&key)?;
         if at.elapsed() < CACHE_TTL {
             Some(v.clone())
         } else {
@@ -80,9 +81,9 @@ impl Cache {
         }
     }
 
-    pub fn put(&self, source: &str, query: &str, v: &SearchResult) {
+    pub fn put(&self, source: &str, query: &str, kind: &str, v: &SearchResult) {
         self.map.lock().unwrap().insert(
-            (source.to_string(), query.to_string()),
+            (format!("{source}|{kind}"), query.to_string()),
             (Instant::now(), v.clone()),
         );
     }
@@ -147,10 +148,22 @@ where
 }
 
 /// 跑一次聚合搜索：每个源的结果到达就回调一次；到截止时间把没回来的记超时。
+#[cfg(test)]
 pub fn run<F: FnMut(Part)>(
     targets: Vec<(String, Arc<dyn Source>)>,
     query: &str,
     limit: i32,
+    cfg: Config,
+    on_part: F,
+) -> Stats {
+    run_kind(targets, query, limit, SearchKind::Song, cfg, on_part)
+}
+
+pub fn run_kind<F: FnMut(Part)>(
+    targets: Vec<(String, Arc<dyn Source>)>,
+    query: &str,
+    limit: i32,
+    kind: SearchKind,
     cfg: Config,
     mut on_part: F,
 ) -> Stats {
@@ -176,26 +189,22 @@ pub fn run<F: FnMut(Part)>(
             let queue = queue.clone();
             let tx = tx.clone();
             let q = query.to_string();
+            let kind_tag = format!("{kind:?}");
             std::thread::spawn(move || loop {
                 let item = { queue.lock().unwrap().pop() };
                 let Some((id, src)) = item else { break };
                 let r = match (cfg.use_cache, !src.is_subprocess()) {
-                    (true, true) => match cache().get(&id, &q) {
-                        Some(hit) => Ok(SearchResult {
-                            songs: hit.songs,
-                            ..Default::default()
-                        }),
-                        None => match src.search(&q, limit, SearchKind::Song) {
+                    (true, true) => match cache().get(&id, &q, &kind_tag) {
+                        Some(hit) => Ok(hit),
+                        None => match src.search(&q, limit, kind) {
                             Ok(v) => {
-                                cache().put(&id, &q, &v);
+                                cache().put(&id, &q, &kind_tag, &v);
                                 Ok(v)
                             }
                             Err(e) => Err(e.to_string()),
                         },
                     },
-                    _ => src
-                        .search(&q, limit, SearchKind::Song)
-                        .map_err(|e| e.to_string()),
+                    _ => src.search(&q, limit, kind).map_err(|e| e.to_string()),
                 };
                 let mut r = r;
                 if let Ok(v) = r.as_mut() {

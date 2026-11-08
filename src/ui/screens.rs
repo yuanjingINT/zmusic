@@ -575,7 +575,16 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
                 );
                 return;
             }
-            render_artists(f, list_area, &app.search_artists, app.search_sel);
+            let tag = |a: &crate::models::ArtistInfo| {
+                app.item_sources(&crate::source::health::artist_key(a))
+            };
+            render_artists(
+                f,
+                list_area,
+                &app.search_artists,
+                app.search_sel,
+                Some(&tag),
+            );
         }
         2 => {
             if app.search_playlists.is_empty() {
@@ -586,7 +595,16 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
                 );
                 return;
             }
-            render_playlists_list(f, list_area, &app.search_playlists, app.search_sel);
+            let tag = |p: &crate::models::Playlist| {
+                app.item_sources(&crate::source::health::playlist_key(p))
+            };
+            render_playlists_list(
+                f,
+                list_area,
+                &app.search_playlists,
+                app.search_sel,
+                Some(&tag),
+            );
         }
         3 => {
             if app.search_albums.is_empty() {
@@ -597,13 +615,26 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
                 );
                 return;
             }
-            render_albums_list(f, list_area, &app.search_albums, app.search_sel);
+            let tag = |a: &crate::models::RecAlbum| {
+                app.item_sources(&crate::source::health::album_key(a))
+            };
+            render_albums_list(f, list_area, &app.search_albums, app.search_sel, Some(&tag));
         }
         _ => {}
     }
 }
 
-fn render_artists(f: &mut Frame, area: Rect, artists: &[crate::models::ArtistInfo], sel: usize) {
+type ArtistTag<'a> = Option<&'a dyn Fn(&crate::models::ArtistInfo) -> Option<String>>;
+type PlaylistTag<'a> = Option<&'a dyn Fn(&crate::models::Playlist) -> Option<String>>;
+type AlbumTag<'a> = Option<&'a dyn Fn(&crate::models::RecAlbum) -> Option<String>>;
+
+fn render_artists(
+    f: &mut Frame,
+    area: Rect,
+    artists: &[crate::models::ArtistInfo],
+    sel: usize,
+    tag: ArtistTag<'_>,
+) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Span::styled("搜索歌手", theme::title()));
@@ -615,10 +646,11 @@ fn render_artists(f: &mut Frame, area: Rect, artists: &[crate::models::ArtistInf
         .take(count)
         .map(|a| {
             let meta = format!("  歌曲 {} · 专辑 {}", a.music_size, a.album_size);
-            ListItem::new(Line::from(vec![
-                Span::raw(a.name.clone()),
-                Span::styled(meta, theme::dim()),
-            ]))
+            let mut spans = vec![Span::raw(a.name.clone()), Span::styled(meta, theme::dim())];
+            if let Some(src) = tag.and_then(|t| t(a)) {
+                spans.push(Span::styled(format!("  {src}"), theme::dim()));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
     let sel = if count > 0 { Some(sel - top) } else { None };
@@ -631,7 +663,13 @@ fn render_artists(f: &mut Frame, area: Rect, artists: &[crate::models::ArtistInf
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_playlists_list(f: &mut Frame, area: Rect, pls: &[crate::models::Playlist], sel: usize) {
+fn render_playlists_list(
+    f: &mut Frame,
+    area: Rect,
+    pls: &[crate::models::Playlist],
+    sel: usize,
+    tag: PlaylistTag<'_>,
+) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Span::styled("搜索歌单", theme::title()));
@@ -647,10 +685,11 @@ fn render_playlists_list(f: &mut Frame, area: Rect, pls: &[crate::models::Playli
                 util::fmt_count(p.play_count),
                 p.track_count
             );
-            ListItem::new(Line::from(vec![
-                Span::raw(p.name.clone()),
-                Span::styled(meta, theme::dim()),
-            ]))
+            let mut spans = vec![Span::raw(p.name.clone()), Span::styled(meta, theme::dim())];
+            if let Some(src) = tag.and_then(|t| t(p)) {
+                spans.push(Span::styled(format!("  {src}"), theme::dim()));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
     let sel = if count > 0 { Some(sel - top) } else { None };
@@ -663,7 +702,13 @@ fn render_playlists_list(f: &mut Frame, area: Rect, pls: &[crate::models::Playli
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_albums_list(f: &mut Frame, area: Rect, albs: &[crate::models::RecAlbum], sel: usize) {
+fn render_albums_list(
+    f: &mut Frame,
+    area: Rect,
+    albs: &[crate::models::RecAlbum],
+    sel: usize,
+    tag: AlbumTag<'_>,
+) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Span::styled("搜索专辑", theme::title()));
@@ -689,10 +734,14 @@ fn render_albums_list(f: &mut Frame, area: Rect, albs: &[crate::models::RecAlbum
                 artist
             };
             let year = a.publish_time.map(util::year_of_ms).unwrap_or_default();
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::raw(a.name.clone()),
                 Span::styled(format!("  {}  {}", artist, year), theme::dim()),
-            ]))
+            ];
+            if let Some(src) = tag.and_then(|t| t(a)) {
+                spans.push(Span::styled(format!("  {src}"), theme::dim()));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
     let sel = if count > 0 { Some(sel - top) } else { None };
@@ -742,7 +791,7 @@ fn render_favorites(f: &mut Frame, area: Rect, app: &mut App) {
             );
             return;
         }
-        render_playlists_list(f, area, pls, app.fav_sel);
+        render_playlists_list(f, area, pls, app.fav_sel, None);
         return;
     }
     if app.favorites.len() == 0 {

@@ -189,23 +189,69 @@ pub fn sort_by_priority(songs: &mut [crate::models::Song]) {
     songs.sort_by(|a, b| crate::source::by_source_priority(&a.source, &b.source));
 }
 
+/// 歌手去重键：名字（无首字母字段，用规范化名字）
+pub fn artist_key(a: &crate::models::ArtistInfo) -> String {
+    format!("a|{}", normalize(&a.name))
+}
+
+/// 歌单去重键：名字（模型里没有创建者字段，只能按名字）
+pub fn playlist_key(p: &crate::models::Playlist) -> String {
+    format!("p|{}", normalize(&p.name))
+}
+
+/// 专辑去重键：名字 + 歌手
+pub fn album_key(a: &crate::models::RecAlbum) -> String {
+    let artist = a
+        .artists
+        .first()
+        .map(|x| x.name.as_str())
+        .or_else(|| a.artist.as_ref().map(|x| x.name.as_str()))
+        .unwrap_or("");
+    format!("l|{}|{}", normalize(&a.name), normalize(artist))
+}
+
+/// 歌曲去重键（带类型前缀，和歌手/歌单/专辑共用一张来源表）
+pub fn song_key(s: &crate::models::Song) -> String {
+    format!("s|{}", dedup_key(s))
+}
+
 /// 去重键：名称 + 主歌手，忽略大小写/空白/常见标点，避免 "晴天" 与 "晴天 " 各占一条
 pub fn dedup_key(s: &crate::models::Song) -> String {
     let artist = s.ar.first().map(|a| a.name.as_str()).unwrap_or("");
     format!("{}|{}", normalize(&s.name), normalize(artist))
 }
 
-fn normalize(s: &str) -> String {
-    s.chars()
-        .filter(|c| {
-            !c.is_whitespace()
-                && !matches!(
-                    c,
-                    '（' | '）' | '(' | ')' | '[' | ']' | '【' | '】' | '-' | '·' | '・'
-                )
-        })
-        .flat_map(|c| c.to_lowercase())
-        .collect()
+/// 规范化名字：全角转半角、去掉各种括号/连接符、连续空白压掉、英文小写。
+/// 只用于去重 key，不用于展示。
+pub fn normalize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_space = true; // 开头不保留空格
+    for c in s.chars() {
+        // 全角 ASCII（！到 ～）转半角，全角空格转普通空格
+        let c = match c {
+            '\u{3000}' => ' ',
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        };
+        if c.is_whitespace() {
+            if !last_space {
+                out.push(' ');
+                last_space = true;
+            }
+            continue;
+        }
+        if matches!(
+            c,
+            '（' | '）' | '(' | ')' | '[' | ']' | '【' | '】' | '-' | '·' | '・' | '《' | '》'
+        ) {
+            continue;
+        }
+        for lc in c.to_lowercase() {
+            out.push(lc);
+        }
+        last_space = false;
+    }
+    out.trim().to_string()
 }
 
 #[cfg(test)]
@@ -369,6 +415,67 @@ mod tests {
         );
         assert_eq!(v[0].name, "n1");
         assert_eq!(v[1].name, "n2");
+    }
+
+    #[test]
+    fn normalize_handles_fullwidth_spaces_and_case() {
+        assert_eq!(normalize(" 周杰伦 "), "周杰伦");
+        assert_eq!(
+            normalize("周杰伦（Jay Chou）"),
+            "周杰伦jay chou",
+            "全角括号去掉、英文小写"
+        );
+        assert_eq!(normalize("ＡＢＣ　ＤＥＦ"), "abc def", "全角字母转半角");
+        assert_eq!(normalize("a    b"), "a b", "连续空白压成一个");
+    }
+
+    #[test]
+    fn artist_and_album_keys_ignore_source_and_formatting() {
+        use crate::models::{Artist, ArtistInfo, RecAlbum};
+        let a1 = ArtistInfo {
+            id: 1,
+            name: "周杰伦".into(),
+            pic_url: None,
+            music_size: 1,
+            album_size: 1,
+        };
+        let a2 = ArtistInfo {
+            id: 999,
+            name: " 周杰倫 ".into(),
+            pic_url: None,
+            music_size: 2,
+            album_size: 2,
+        };
+        // 繁简不同不合并（没做转换），但空格/大小写要合并
+        assert_ne!(artist_key(&a1), artist_key(&a2));
+        let a3 = ArtistInfo {
+            name: "Jay Chou".into(),
+            ..a1.clone()
+        };
+        let a4 = ArtistInfo {
+            name: "jay chou".into(),
+            ..a1.clone()
+        };
+        assert_eq!(artist_key(&a3), artist_key(&a4));
+
+        let al = |name: &str, ar: &str| RecAlbum {
+            id: 1,
+            name: name.into(),
+            artist: Some(Artist {
+                id: 1,
+                name: ar.into(),
+            }),
+            artists: vec![Artist {
+                id: 1,
+                name: ar.into(),
+            }],
+            pic_url: None,
+            publish_time: None,
+        };
+        assert_eq!(
+            album_key(&al("叶惠美", "周杰伦")),
+            album_key(&al(" 叶惠美 ", " 周杰伦 "))
+        );
     }
 
     #[test]

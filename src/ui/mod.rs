@@ -156,8 +156,10 @@ pub struct App {
     probe_total: usize,
     probe_done: usize,
     probe_started: Option<Instant>,
-    /// 聚合去重：`名称+歌手` → 结果下标（代表源按优先级替换）
+    /// 聚合去重：key → 结果下标（歌曲用，代表源按优先级替换）
     agg_index: std::collections::HashMap<String, usize>,
+    /// 聚合去重：所有类型共用（key 带类型前缀 a|/p|l|/s|）
+    agg_seen: std::collections::HashSet<String>,
     agg_failed: Vec<String>,
     /// 搜索代数：切源/新搜索后旧结果直接丢
     search_gen: u64,
@@ -172,6 +174,10 @@ pub struct App {
     agg_sources: std::collections::HashMap<String, Vec<String>>,
     /// 同一首歌在各源上的完整条目：主源取不到流时按优先级换源重试
     agg_candidates: std::collections::HashMap<String, Vec<Song>>,
+    /// 歌手 / 专辑 / 歌单 的候选：key → [(source, 对方 id)]，Enter 时按优先级试
+    agg_artist_candidates: std::collections::HashMap<String, Vec<(String, i64)>>,
+    agg_album_candidates: std::collections::HashMap<String, Vec<(String, i64)>>,
+    agg_playlist_candidates: std::collections::HashMap<String, Vec<(String, i64)>>,
     /// 取不到流的曲目（本次会话跳过，随机模式不再撞）
     bad_songs: std::collections::HashSet<String>,
     /// 连续跳过次数，超过 5 就停
@@ -295,6 +301,7 @@ impl App {
             probe_done: 0,
             probe_started: None,
             agg_index: std::collections::HashMap::new(),
+            agg_seen: std::collections::HashSet::new(),
             agg_failed: Vec::new(),
             search_gen: 0,
             show_all_sources: false,
@@ -303,6 +310,9 @@ impl App {
             duration_asked: std::collections::HashSet::new(),
             agg_sources: std::collections::HashMap::new(),
             agg_candidates: std::collections::HashMap::new(),
+            agg_artist_candidates: std::collections::HashMap::new(),
+            agg_album_candidates: std::collections::HashMap::new(),
+            agg_playlist_candidates: std::collections::HashMap::new(),
             bad_songs: std::collections::HashSet::new(),
             skip_streak: 0,
             source_id: if !settings.source.is_empty()
@@ -681,6 +691,15 @@ impl App {
                         Ok(mut v) => {
                             // 没有时长的曲目不进列表（单源也一样）
                             crate::source::agg::retain_timed(&mut v.songs);
+                            // 单源也跑同一套去重（同名歌手/专辑/歌单 + 同名歌曲）
+                            let mut seen = std::collections::HashSet::new();
+                            v.songs.retain(|s| seen.insert(health::song_key(s)));
+                            let mut seen = std::collections::HashSet::new();
+                            v.artists.retain(|a| seen.insert(health::artist_key(a)));
+                            let mut seen = std::collections::HashSet::new();
+                            v.playlists.retain(|p| seen.insert(health::playlist_key(p)));
+                            let mut seen = std::collections::HashSet::new();
+                            v.albums.retain(|a| seen.insert(health::album_key(a)));
                             self.search = v.songs;
                             self.search_playlists = v.playlists;
                             self.search_albums = v.albums;
@@ -711,27 +730,82 @@ impl App {
                     }
                     self.search_loading = false;
                     match result {
-                        Ok(v) => {
-                            for song in &v.songs {
-                                let key = health::dedup_key(song);
-                                let list = self.agg_sources.entry(key.clone()).or_default();
-                                if !list.contains(&song.source) {
-                                    list.push(song.source.clone());
+                        Ok(mut v) => {
+                            crate::source::agg::retain_timed(&mut v.songs);
+                            if !v.songs.is_empty() {
+                                for song in &v.songs {
+                                    let key = health::song_key(song);
+                                    let list = self.agg_sources.entry(key.clone()).or_default();
+                                    if !list.contains(&song.source) {
+                                        list.push(song.source.clone());
+                                    }
+                                    let cands = self.agg_candidates.entry(key).or_default();
+                                    if !cands
+                                        .iter()
+                                        .any(|c| c.source == song.source && c.s_id == song.s_id)
+                                    {
+                                        cands.push(song.clone());
+                                    }
                                 }
-                                let cands = self.agg_candidates.entry(key).or_default();
-                                if !cands
-                                    .iter()
-                                    .any(|c| c.source == song.source && c.s_id == song.s_id)
-                                {
-                                    cands.push(song.clone());
+                                // 代表源按优先级：后到的网易云会顶掉先到的咪咕
+                                health::merge_songs_priority(
+                                    &mut self.search,
+                                    &mut self.agg_index,
+                                    &v.songs,
+                                );
+                            }
+                            // 歌手 / 歌单 / 专辑：按类型各自去重，同一份 agg_sources 记来源
+                            for a in &v.artists {
+                                let key = health::artist_key(a);
+                                let list = self.agg_sources.entry(key.clone()).or_default();
+                                if !list.contains(&id) {
+                                    list.push(id.clone());
+                                }
+                                let cands = self
+                                    .agg_artist_candidates
+                                    .entry(health::artist_key(a))
+                                    .or_default();
+                                if !cands.iter().any(|(s, i)| s == &id && *i == a.id) {
+                                    cands.push((id.clone(), a.id));
+                                }
+                                if self.agg_seen.insert(key) {
+                                    self.search_artists.push(a.clone());
                                 }
                             }
-                            // 代表源按优先级：后到的网易云会顶掉先到的咪咕
-                            health::merge_songs_priority(
-                                &mut self.search,
-                                &mut self.agg_index,
-                                &v.songs,
-                            );
+                            for pl in &v.playlists {
+                                let key = health::playlist_key(pl);
+                                let list = self.agg_sources.entry(key.clone()).or_default();
+                                if !list.contains(&id) {
+                                    list.push(id.clone());
+                                }
+                                let cands = self
+                                    .agg_playlist_candidates
+                                    .entry(health::playlist_key(pl))
+                                    .or_default();
+                                if !cands.iter().any(|(s, i)| s == &id && *i == pl.id) {
+                                    cands.push((id.clone(), pl.id));
+                                }
+                                if self.agg_seen.insert(key) {
+                                    self.search_playlists.push(pl.clone());
+                                }
+                            }
+                            for al in &v.albums {
+                                let key = health::album_key(al);
+                                let list = self.agg_sources.entry(key.clone()).or_default();
+                                if !list.contains(&id) {
+                                    list.push(id.clone());
+                                }
+                                let cands = self
+                                    .agg_album_candidates
+                                    .entry(health::album_key(al))
+                                    .or_default();
+                                if !cands.iter().any(|(s, i)| s == &id && *i == al.id) {
+                                    cands.push((id.clone(), al.id));
+                                }
+                                if self.agg_seen.insert(key) {
+                                    self.search_albums.push(al.clone());
+                                }
+                            }
                             self.failed_sources.remove(&id);
                         }
                         Err(e) => {
@@ -748,6 +822,22 @@ impl App {
                     self.search_loading = false;
                     // 全部到齐后按源优先级稳定排序（网易云在最上面）
                     health::sort_by_priority(&mut self.search);
+                    let prio = |app: &Self, key: String| -> u8 {
+                        app.agg_sources
+                            .get(&key)
+                            .and_then(|v| v.first())
+                            .map(|s| crate::source::source_priority(s))
+                            .unwrap_or(99)
+                    };
+                    let mut artists = std::mem::take(&mut self.search_artists);
+                    artists.sort_by_key(|a| prio(self, health::artist_key(a)));
+                    self.search_artists = artists;
+                    let mut playlists = std::mem::take(&mut self.search_playlists);
+                    playlists.sort_by_key(|p| prio(self, health::playlist_key(p)));
+                    self.search_playlists = playlists;
+                    let mut albums = std::mem::take(&mut self.search_albums);
+                    albums.sort_by_key(|a| prio(self, health::album_key(a)));
+                    self.search_albums = albums;
                     for f in failed {
                         self.agg_failed.push(f);
                     }
@@ -1257,6 +1347,11 @@ impl App {
             }
             return;
         }
+        // F5：搜索页等价于 S（换源并自动重搜），任何焦点状态都生效
+        if k.code == KeyCode::F(5) && self.screen == ScreenKind::Search {
+            self.cycle_source();
+            return;
+        }
         // 搜索页 R：随时重探（大写 R，避免和小写搜索词冲突）
         if k.code == KeyCode::Char('R') {
             self.reprobe_with_toast();
@@ -1750,38 +1845,46 @@ impl App {
         self.search_loading = true;
         self.search.clear();
         self.agg_index.clear();
+        self.agg_seen.clear();
         self.agg_sources.clear();
         self.agg_candidates.clear();
+        self.agg_artist_candidates.clear();
+        self.agg_album_candidates.clear();
+        self.agg_playlist_candidates.clear();
         self.agg_failed.clear();
         self.search_sel = 0;
         self.selected.clear();
-        if crate::source::SearchKind::from_index(self.search_type)
-            != crate::source::SearchKind::Song
-        {
+        let kind = crate::source::SearchKind::from_index(self.search_type);
+        let mut targets: Vec<(String, Arc<dyn crate::source::Source>)> = Vec::new();
+        for src in self.registry.all() {
+            let caps = src.capabilities();
+            if !self.health.state(src.id()).is_ok() || !caps.supports(kind) {
+                continue;
+            }
+            // 搜歌曲时只并能出流的源；歌手/歌单/专辑不需要 can_stream
+            if kind == crate::source::SearchKind::Song && !caps.can_stream {
+                continue;
+            }
+            targets.push((src.id().to_string(), src.clone()));
+        }
+        if targets.is_empty() {
             self.search_loading = false;
+            let label = match kind {
+                crate::source::SearchKind::Song => "歌曲",
+                crate::source::SearchKind::Artist => "歌手",
+                crate::source::SearchKind::Playlist => "歌单",
+                crate::source::SearchKind::Album => "专辑",
+            };
             self.toast = Some((
-                "聚合源只搜歌曲，切回其它源再搜歌手/歌单/专辑".to_string(),
+                format!("没有可用源支持「{label}」搜索（R 重探或换源后再试）"),
                 Instant::now(),
             ));
             return;
         }
-        let mut targets: Vec<(String, Arc<dyn crate::source::Source>)> = Vec::new();
-        for src in self.registry.all() {
-            // 只并「能播」的源：能搜不能播的仍可在单源里搜，但不进聚合
-            if self.health.state(src.id()).is_ok() && src.capabilities().can_stream {
-                targets.push((src.id().to_string(), src.clone()));
-            }
-        }
-        if targets.is_empty() {
-            // 探测还没完成/全离线：兜底只问网易云，至少给个结果
-            if let Some(src) = self.registry.get("netease") {
-                targets.push(("netease".to_string(), src));
-            }
-        }
         let tx = self.tx.clone();
         let cfg = crate::source::agg::Config::default();
         thread::spawn(move || {
-            let stats = crate::source::agg::run(targets, &q, 20, cfg, |p| {
+            let stats = crate::source::agg::run_kind(targets, &q, 20, kind, cfg, |p| {
                 let _ = tx.send(AppMsg::AggPart {
                     gen,
                     id: p.id,
@@ -1910,6 +2013,49 @@ impl App {
             }
         }
         (crate::source::source_display(&s.source), can)
+    }
+
+    /// 候选里按源优先级挑第一个「能打开详情」的：目前只有网易云的详情接口
+    fn pick_candidate(
+        &self,
+        map: &std::collections::HashMap<String, Vec<(String, i64)>>,
+        key: &str,
+    ) -> Option<i64> {
+        if self.source_id != AGGREGATE_ID {
+            return None;
+        }
+        let mut cands = map.get(key)?.clone();
+        cands.sort_by(|a, b| crate::source::by_source_priority(&a.0, &b.0));
+        cands
+            .iter()
+            .find(|(src, _)| src == "netease")
+            .map(|(_, id)| *id)
+    }
+
+    fn only_netease_toast(&mut self, what: &str) {
+        self.toast = Some((
+            format!("这个{what}只有网易云能打开详情（其它源暂无接口）"),
+            Instant::now(),
+        ));
+    }
+
+    /// 某一行（歌/歌手/歌单/专辑）命中的源，按优先级并列；聚合模式才用
+    pub(crate) fn item_sources(&self, key: &str) -> Option<String> {
+        if self.source_id != AGGREGATE_ID {
+            return None;
+        }
+        let list = self.agg_sources.get(key)?;
+        if list.is_empty() {
+            return None;
+        }
+        let mut ids = list.clone();
+        ids.sort_by(|a, b| crate::source::by_source_priority(a, b));
+        Some(
+            ids.iter()
+                .map(|id| crate::source::source_display(id))
+                .collect::<Vec<_>>()
+                .join("+"),
+        )
     }
 
     /// 这首歌的源能不能出流（查 capability，不发网络请求）
@@ -2096,17 +2242,30 @@ impl App {
             }
             1 => {
                 if let Some(a) = self.search_artists.get(self.search_sel) {
-                    self.open_artist(a.id, a.name.clone());
+                    let key = health::artist_key(a);
+                    let id = self.pick_candidate(&self.agg_artist_candidates, &key);
+                    match id {
+                        Some(id) => self.open_artist(id, a.name.clone()),
+                        None => self.only_netease_toast("歌手"),
+                    }
                 }
             }
             2 => {
                 if let Some(p) = self.search_playlists.get(self.search_sel) {
-                    self.open_playlist(p.id);
+                    let key = health::playlist_key(p);
+                    match self.pick_candidate(&self.agg_playlist_candidates, &key) {
+                        Some(id) => self.open_playlist(id),
+                        None => self.only_netease_toast("歌单"),
+                    }
                 }
             }
             3 => {
                 if let Some(a) = self.search_albums.get(self.search_sel) {
-                    self.open_album(a.id);
+                    let key = health::album_key(a);
+                    match self.pick_candidate(&self.agg_album_candidates, &key) {
+                        Some(id) => self.open_album(id),
+                        None => self.only_netease_toast("专辑"),
+                    }
                 }
             }
             _ => {}
