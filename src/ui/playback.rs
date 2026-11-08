@@ -47,6 +47,36 @@ impl PlayMode {
     }
 }
 
+/// 播完一首后该放哪首。
+///
+/// - `Sequential`：下一首；已经是最后一首就返回 None（停住，不循环）
+/// - `RepeatOne`：当前这首（重播）
+/// - `Shuffle`：用 `seed` 取一个"非当前"的位置（纯函数，方便测试）
+pub fn next_index(len: usize, idx: usize, mode: PlayMode, seed: u64) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let idx = idx.min(len - 1);
+    match mode {
+        PlayMode::Sequential => {
+            if idx + 1 < len {
+                Some(idx + 1)
+            } else {
+                None
+            }
+        }
+        PlayMode::RepeatOne => Some(idx),
+        PlayMode::Shuffle => {
+            if len == 1 {
+                Some(0)
+            } else {
+                let offset = 1 + (seed % (len as u64 - 1)) as usize;
+                Some((idx + offset) % len)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +90,51 @@ mod tests {
             assert_eq!(PlayMode::parse(m.as_str()), m);
         }
         assert_eq!(PlayMode::parse("nonsense"), PlayMode::Sequential);
+    }
+
+    #[test]
+    fn next_index_on_empty_queue_is_none() {
+        for m in [PlayMode::Sequential, PlayMode::Shuffle, PlayMode::RepeatOne] {
+            assert_eq!(next_index(0, 0, m, 1), None);
+        }
+    }
+
+    #[test]
+    fn sequential_stops_at_end() {
+        assert_eq!(next_index(3, 0, PlayMode::Sequential, 0), Some(1));
+        assert_eq!(next_index(3, 1, PlayMode::Sequential, 0), Some(2));
+        assert_eq!(next_index(3, 2, PlayMode::Sequential, 0), None);
+    }
+
+    #[test]
+    fn repeat_one_stays_on_current() {
+        assert_eq!(next_index(3, 1, PlayMode::RepeatOne, 0), Some(1));
+        assert_eq!(next_index(1, 0, PlayMode::RepeatOne, 7), Some(0));
+    }
+
+    #[test]
+    fn shuffle_never_picks_current_and_covers_others() {
+        for seed in 0..50u64 {
+            let n = next_index(5, 2, PlayMode::Shuffle, seed).unwrap();
+            assert_ne!(n, 2);
+            assert!(n < 5);
+        }
+        // 两首时只有"另一首"
+        assert_eq!(next_index(2, 0, PlayMode::Shuffle, 0), Some(1));
+        assert_eq!(next_index(2, 1, PlayMode::Shuffle, 0), Some(0));
+        // 单曲随机 = 它自己
+        assert_eq!(next_index(1, 0, PlayMode::Shuffle, 3), Some(0));
+    }
+
+    #[test]
+    fn single_song_sequential_stops() {
+        assert_eq!(next_index(1, 0, PlayMode::Sequential, 0), None);
+    }
+
+    #[test]
+    fn out_of_range_index_is_clamped() {
+        assert_eq!(next_index(2, 99, PlayMode::Sequential, 0), None);
+        assert_eq!(next_index(2, 99, PlayMode::RepeatOne, 0), Some(1));
     }
 
     #[test]

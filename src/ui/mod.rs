@@ -146,6 +146,7 @@ pub struct App {
     song_cfg_open: bool,
     song_cfg_sel: usize,
     play_mode: PlayMode,
+    rng: u64,
     pending_seek: Option<f64>,
 
     ctx_open: bool,
@@ -228,6 +229,10 @@ impl App {
             song_cfg_open: false,
             song_cfg_sel: 0,
             play_mode,
+            rng: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0x9E3779B97F4A7C15),
             pending_seek: None,
 
             ctx_open: false,
@@ -476,8 +481,24 @@ impl App {
 
     fn tick(&mut self) {
         let st = self.player.state();
-        if st.eof && !self.prev_eof && !st.paused && self.queue_idx.is_some() {
-            self.next(1);
+        // 播完一首：按播放顺序决定下一首；顺序模式播到末尾就停住。
+        // prev_eof 用来去重，避免 eof 一直为真时每帧都推进。
+        // keep-open 下播完可能同时 paused=true，所以这里不能用 paused 当门禁；
+        // 播到中途按暂停时 eof 为假，本来就不会触发。
+        if st.eof && !self.prev_eof {
+            if let Some(cur) = self.queue_idx {
+                self.rng = self
+                    .rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                if let Some(ni) =
+                    playback::next_index(self.queue.len(), cur, self.play_mode, self.rng)
+                {
+                    self.queue_idx = Some(ni);
+                    self.play_gen += 1;
+                    self.play_current();
+                }
+            }
         }
         self.prev_eof = st.eof;
         if let Some((_, t)) = &self.toast {

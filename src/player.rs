@@ -61,6 +61,9 @@ impl Player {
                 &ipc,
                 "--volume=70",
                 "--cache=yes",
+                // eof-reached 只在 keep-open 时可靠为 yes；没有它，播完就回到 idle，
+                // 自动下一首永远触发不了
+                "--keep-open=yes",
                 "--demuxer-max-bytes=512MiB",
                 "--log-file=/tmp/ncm_mpv.log",
             ])
