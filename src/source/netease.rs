@@ -1,4 +1,6 @@
 use crate::models::*;
+use crate::source::{SearchKind, TrackId};
+use anyhow::anyhow;
 use crate::util;
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
@@ -36,7 +38,14 @@ impl NetEaseSource {
         serde_json::from_str(&body).with_context(|| format!("解析失败: {}", preview))
     }
 
-    pub fn search(&self, kw: &str, limit: i32, stype: i32) -> Result<SearchResult> {
+    pub fn search(&self, kw: &str, limit: i32, kind: SearchKind) -> Result<SearchResult> {
+        // 网易云私有协议：1 单曲 / 100 歌手 / 1000 歌单 / 10 专辑
+        let stype = match kind {
+            SearchKind::Song => 1,
+            SearchKind::Artist => 100,
+            SearchKind::Playlist => 1000,
+            SearchKind::Album => 10,
+        };
         let r: SearchResp = self.get_json(
             "cloudsearch",
             &[
@@ -45,7 +54,9 @@ impl NetEaseSource {
                 ("type", &stype.to_string()),
             ],
         )?;
-        Ok(r.result.unwrap_or_default())
+        let mut res = r.result.unwrap_or_default();
+        tag(&mut res.songs);
+        Ok(res)
     }
 
     pub fn artist_songs(&self, id: i64, limit: i32) -> Result<Vec<Song>> {
@@ -53,7 +64,9 @@ impl NetEaseSource {
             "artist/songs",
             &[("id", &id.to_string()), ("limit", &limit.to_string())],
         )?;
-        Ok(r.songs)
+        let mut songs = r.songs;
+        tag(&mut songs);
+        Ok(songs)
     }
 
     pub fn toplist(&self) -> Result<Vec<Toplist>> {
@@ -71,13 +84,16 @@ impl NetEaseSource {
             "personalized/newsong",
             &[("limit", &limit.to_string())],
         )?;
-        Ok(r
+        let mut songs: Vec<Song> = r
             .result
             .unwrap_or_default()
             .into_iter()
             .filter_map(|item| {
                 let song = item.song?;
+                let id = song.id;
                 Some(Song {
+                    source: "netease".to_string(),
+                    s_id: id.to_string(),
                     id: song.id,
                     name: song.name,
                     ar: song.artists,
@@ -88,9 +104,12 @@ impl NetEaseSource {
                     },
                     dt: song.duration,
                     fee: song.fee,
+                    ..Default::default()
                 })
             })
-            .collect())
+            .collect();
+        tag(&mut songs);
+        Ok(songs)
     }
 
     pub fn album_new(&self, limit: i32) -> Result<Vec<RecAlbum>> {
@@ -122,13 +141,16 @@ impl NetEaseSource {
             }
             offset += 500;
         }
+        tag(&mut all);
         Ok(all)
     }
 
     pub fn album(&self, id: i64) -> Result<(String, Vec<Song>)> {
         let r: AlbumResp = self.get_json("album", &[("id", &id.to_string())])?;
         let name = r.album.as_ref().map(|a| a.name.clone()).unwrap_or_else(|| "专辑".to_string());
-        Ok((name, r.songs))
+        let mut songs = r.songs;
+        tag(&mut songs);
+        Ok((name, songs))
     }
 
     pub fn lyric(&self, id: i64) -> Result<Lyrics> {
@@ -162,6 +184,21 @@ impl NetEaseSource {
 /// 网易云对 [`crate::source::Source`] 的实现。
 ///
 /// 这里只做转发：接口语义与拆出来之前完全一致（同一批端点、同样的参数）。
+/// 给一批歌打上来源标记：混源队列靠它知道该去哪个源取流
+fn tag(songs: &mut [Song]) {
+    for s in songs.iter_mut() {
+        s.source = "netease".to_string();
+        s.s_id = s.id.to_string();
+    }
+}
+
+/// 网易云的 ID 必须是数字，字符串 ID 是给其它源的
+fn numeric_id(id: &TrackId) -> Result<i64> {
+    id.as_str()
+        .parse::<i64>()
+        .map_err(|_| anyhow!("网易云 ID 必须是数字，收到: {}", id))
+}
+
 impl crate::source::Source for NetEaseSource {
     fn id(&self) -> &'static str {
         "netease"
@@ -171,17 +208,17 @@ impl crate::source::Source for NetEaseSource {
         "网易云音乐"
     }
 
-    fn search(&self, keyword: &str, limit: i32, kind: i32) -> Result<SearchResult> {
+    fn search(&self, keyword: &str, limit: i32, kind: SearchKind) -> Result<SearchResult> {
         NetEaseSource::search(self, keyword, limit, kind)
     }
 
-    fn lyric(&self, id: i64) -> Result<Lyrics> {
-        NetEaseSource::lyric(self, id)
+    fn lyric(&self, id: &TrackId) -> Result<Lyrics> {
+        NetEaseSource::lyric(self, numeric_id(id)?)
     }
 
-    fn stream_url(&self, id: i64, quality: &str) -> Result<Option<String>> {
+    fn stream_url(&self, id: &TrackId, quality: &str) -> Result<Option<String>> {
         Ok(self
-            .song_url_v1(&[id], quality)?
+            .song_url_v1(&[numeric_id(id)?], quality)?
             .into_iter()
             .next()
             .and_then(|u| u.url))

@@ -27,6 +27,10 @@ pub struct Song {
     pub al: Album,
     pub dt: i64,
     pub fee: i32,
+    /// 来源标识（netease / youtube / ...）；混源队列靠它决定去哪个源取流
+    pub source: String,
+    /// 该源内部的字符串 ID（网易云就是 id 的十进制字符串，YouTube 是视频 id）
+    pub s_id: String,
 }
 
 

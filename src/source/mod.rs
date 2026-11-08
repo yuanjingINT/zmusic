@@ -1,38 +1,81 @@
-//! 音乐源抽象（P1 第一步：先把网易云从 `api.rs` 里拆出来，行为不变）。
+//! 音乐源抽象。
 //!
-//! 目标结构：每个平台一个 adapter 实现 [`Source`]，App 以后只认 trait，
-//! 不在 UI 里写死某一家的接口。这一刀只搬代码 + 建骨架，不引新依赖、不改行为。
+//! 每个平台一个 adapter 实现 [`Source`]，App 只认 trait。
+//! 这一版先把接口定型：ID 用字符串包装（YouTube 是 `dQw4w9WgXcQ` 这种）、
+//! 搜索类型用枚举（不再把网易云的 1/100/1000/10 漏到上层）。
 
 pub mod netease;
 
 use crate::models::{Lyrics, SearchResult};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::sync::Arc;
+
+/// 跨源通用的曲目 ID。网易云内部是数字，这里统一用字符串承载。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TrackId(pub String);
+
+impl TrackId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TrackId {
+    fn from(s: String) -> Self {
+        TrackId(s)
+    }
+}
+
+impl From<&str> for TrackId {
+    fn from(s: &str) -> Self {
+        TrackId(s.to_string())
+    }
+}
+
+impl std::fmt::Display for TrackId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// 搜索类型。各源自己映射到私有协议（网易云：1/100/1000/10）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchKind {
+    Song,
+    Artist,
+    Playlist,
+    Album,
+}
+
+impl SearchKind {
+    /// UI 里的 0..3（歌曲/歌手/歌单/专辑）到枚举
+    pub fn from_index(i: usize) -> Self {
+        match i {
+            1 => SearchKind::Artist,
+            2 => SearchKind::Playlist,
+            3 => SearchKind::Album,
+            _ => SearchKind::Song,
+        }
+    }
+}
 
 /// 一个可搜索、可出流、可出歌词的音乐源。
 ///
-/// P1 只用网易云；YouTube Music / SoundCloud（走 yt-dlp）与 Jamendo / Audius
-/// 会在后续提交里各自实现这个 trait。
-// P1 骨架：App 目前仍直接调 NetEaseSource 的专有接口（榜单/歌单/专辑等还没进 trait），
-// 所以这几个 trait 方法暂时没有调用点；接第二个源时从这里开始用。
+/// App 目前只通过注册表的 `stream_url` 用到其中一部分；`search`/`lyric`/`name`
+/// 等是给第二个源（YouTube/Jamendo）接入时用的，先标 dead_code。
 #[allow(dead_code)]
 pub trait Source: Send + Sync {
     /// 稳定的内部标识，配置与 UI 上都用它（如 `"netease"`）
     fn id(&self) -> &'static str;
     /// 给人看的名字
     fn name(&self) -> &'static str;
-    /// 搜索；`kind` 沿用网易云的 1/100/1000/10 语义（单曲/歌手/歌单/专辑）
-    fn search(&self, keyword: &str, limit: i32, kind: i32) -> Result<SearchResult>;
-    /// 单曲歌词
-    fn lyric(&self, id: i64) -> Result<Lyrics>;
-    /// 取播放地址；拿不到（无版权/需会员）时返回 Ok(None)
-    fn stream_url(&self, id: i64, quality: &str) -> Result<Option<String>>;
+    fn search(&self, keyword: &str, limit: i32, kind: SearchKind) -> Result<SearchResult>;
+    fn lyric(&self, id: &TrackId) -> Result<Lyrics>;
+    /// 取播放地址；拿不到（无版权/需会员/流过期）时返回 Ok(None)
+    fn stream_url(&self, id: &TrackId, quality: &str) -> Result<Option<String>>;
 }
 
 /// 源注册表：按 id 取源，App 以后从这儿拿。
-///
-/// 目前只登记了网易云，`with_defaults` 之外没有调用点，所以标了 dead_code；
-/// 接第二个源时它就会变成实际的入口。
 #[allow(dead_code)]
 pub struct SourceRegistry {
     sources: Vec<Arc<dyn Source>>,
@@ -70,11 +113,25 @@ impl SourceRegistry {
     pub fn len(&self) -> usize {
         self.sources.len()
     }
+
+    /// 按 source 标识取流；未知源给明确错误，别让上层拿到 None 猜
+    pub fn stream_url(
+        &self,
+        source: &str,
+        id: &TrackId,
+        quality: &str,
+    ) -> Result<Option<String>> {
+        match self.get(source) {
+            Some(s) => s.stream_url(id, quality),
+            None => Err(anyhow!("未知音乐源: {}（没有对应的 adapter）", source)),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Song;
 
     #[test]
     fn netease_registered_by_default() {
@@ -93,5 +150,44 @@ mod tests {
             "http://127.0.0.1:3000".to_string(),
         )));
         assert_eq!(reg.len(), 1);
+    }
+
+    #[test]
+    fn unknown_source_stream_url_errors_clearly() {
+        let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string());
+        let err = reg
+            .stream_url("youtube", &TrackId::from("dQw4w9WgXcQ"), "exhigh")
+            .expect_err("未知源必须报错");
+        let msg = err.to_string();
+        assert!(msg.contains("未知音乐源"), "错误信息应说明未知源: {msg}");
+        assert!(msg.contains("youtube"), "错误信息应带上源名: {msg}");
+    }
+
+    #[test]
+    fn mixed_source_song_round_trips_through_json() {
+        let s = Song {
+            id: 0,
+            name: "Never Gonna Give You Up".to_string(),
+            ar: Vec::new(),
+            al: Default::default(),
+            dt: 213_000,
+            fee: 0,
+            source: "youtube".to_string(),
+            s_id: "dQw4w9WgXcQ".to_string(),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Song = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.source, "youtube");
+        assert_eq!(back.s_id, "dQw4w9WgXcQ");
+        assert_eq!(back.name, s.name);
+    }
+
+    #[test]
+    fn search_kind_maps_from_ui_index() {
+        assert_eq!(SearchKind::from_index(0), SearchKind::Song);
+        assert_eq!(SearchKind::from_index(1), SearchKind::Artist);
+        assert_eq!(SearchKind::from_index(2), SearchKind::Playlist);
+        assert_eq!(SearchKind::from_index(3), SearchKind::Album);
+        assert_eq!(SearchKind::from_index(99), SearchKind::Song);
     }
 }

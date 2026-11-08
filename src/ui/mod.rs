@@ -1225,16 +1225,6 @@ impl App {
         }
     }
 
-    fn search_type_api(&self) -> i32 {
-        match self.search_type {
-            0 => 1,
-            1 => 100,
-            2 => 1000,
-            3 => 10,
-            _ => 1,
-        }
-    }
-
     fn set_search_type(&mut self, t: usize) {
         if t == self.search_type {
             return;
@@ -1250,10 +1240,10 @@ impl App {
     fn do_search(&mut self, q: String) {
         // 焦点保持原状：输入栏聚焦时继续可编辑，列表聚焦时保持列表操作
         self.search_loading = true;
-        let stype = self.search_type_api();
+        let kind = crate::source::SearchKind::from_index(self.search_type);
         let api = self.api.clone();
         let tx = self.tx.clone();
-        spawn(tx, move || match api.search(&q, 60, stype) {
+        spawn(tx, move || match api.search(&q, 60, kind) {
             Ok(v) => AppMsg::Search(Ok(v)),
             Err(e) => AppMsg::Search(Err(e.to_string())),
         });

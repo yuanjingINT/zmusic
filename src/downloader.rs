@@ -323,10 +323,9 @@ mod tests {
         Song {
             id,
             name: name.to_string(),
-            ar: Vec::new(),
-            al: Default::default(),
-            dt: 0,
-            fee: 0,
+            source: "netease".to_string(),
+            s_id: id.to_string(),
+            ..Default::default()
         }
     }
 
