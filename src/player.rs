@@ -16,6 +16,12 @@ pub struct MpvState {
     pub eof: bool,
     pub idle: bool,
     pub volume: u8,
+    /// mpv 是否真的把文件加载起来了（file-loaded 事件）
+    pub loaded: bool,
+    /// 最近一次加载失败的原因（end-file reason=error 的原始错误串）
+    pub error: Option<String>,
+    /// 失败次数序号：UI 靠它判断「又失败了一次」，不会重复弹同一条
+    pub error_seq: u64,
 }
 
 #[allow(dead_code)]
@@ -279,6 +285,26 @@ fn ipc_loop(mut stream: UnixStream, rx: Receiver<MpvCmd>, state: Arc<Mutex<MpvSt
                 let line = buf[i..i + pos].to_vec();
                 i += pos + 1;
                 if let Ok(v) = serde_json::from_slice::<Value>(&line) {
+                    // 播放结果事件：失败必须能被上层看见，否则就是「界面在播、其实没声」
+                    if let Some(ev) = v.get("event").and_then(|x| x.as_str()) {
+                        match ev {
+                            "file-loaded" => {
+                                let mut st = state.lock().unwrap();
+                                st.loaded = true;
+                                st.error = None;
+                            }
+                            "end-file" => {
+                                let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("");
+                                let mut st = state.lock().unwrap();
+                                st.loaded = false;
+                                if reason == "error" {
+                                    st.error = Some(mpv_error_text(&v));
+                                    st.error_seq += 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     if let Some(rr) = v.get("request_id").and_then(|x| x.as_u64()) {
                         if let Some(idx) = outstanding.iter().position(|(id, _)| *id == rr) {
                             let p = outstanding.remove(idx).1;
@@ -291,6 +317,23 @@ fn ipc_loop(mut stream: UnixStream, rx: Receiver<MpvCmd>, state: Arc<Mutex<MpvSt
         }
         std::thread::sleep(Duration::from_millis(60));
     }
+}
+
+/// mpv 的 `end-file` 事件里错误字段在不同版本里叫法不同，取原始字符串
+fn mpv_error_text(v: &Value) -> String {
+    for key in ["error", "file_error"] {
+        if let Some(e) = v.get(key) {
+            if let Some(s) = e.as_str() {
+                if !s.is_empty() {
+                    return s.to_string();
+                }
+            }
+            if e.as_bool() == Some(true) {
+                return "loading failed".to_string();
+            }
+        }
+    }
+    "loading failed".to_string()
 }
 
 fn apply_poll(v: &Value, p: Poll, state: &Arc<Mutex<MpvState>>) {

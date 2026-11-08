@@ -147,6 +147,53 @@ where
     (None, failures)
 }
 
+/// 单源取流失败时，用「歌名 + 歌手」去其它源补候选。
+///
+/// 只在单源播放失败后调用：跳过 yt-dlp 系（子进程，一个要几秒）和不能出流的源，
+/// 最多问 6 个源、每个 5 条，名字规范化后必须完全一致才算同一首，宁可漏也不误配。
+pub fn fallback_candidates(
+    registry: &crate::source::SourceRegistry,
+    tried: &[crate::models::Song],
+    query: &str,
+) -> Vec<crate::models::Song> {
+    use crate::source::SearchKind;
+    let tried_sources: Vec<&str> = tried.iter().map(|s| s.source.as_str()).collect();
+    let want =
+        crate::source::health::normalize(tried.first().map(|s| s.name.as_str()).unwrap_or(""));
+    let mut out: Vec<crate::models::Song> = Vec::new();
+    let mut asked = 0;
+    for src in registry.all() {
+        if asked >= 6 {
+            break;
+        }
+        let caps = src.capabilities();
+        if !caps.can_stream || !caps.supports(SearchKind::Song) || src.is_subprocess() {
+            continue;
+        }
+        if tried_sources.contains(&src.id()) {
+            continue;
+        }
+        asked += 1;
+        let Ok(res) = src.search(query, 5, SearchKind::Song) else {
+            continue;
+        };
+        for song in res.songs {
+            if crate::source::health::normalize(&song.name) != want {
+                continue;
+            }
+            if out
+                .iter()
+                .any(|s| s.source == song.source && s.s_id == song.s_id)
+            {
+                continue;
+            }
+            out.push(song);
+        }
+    }
+    out.sort_by(|a, b| crate::source::by_source_priority(&a.source, &b.source));
+    out
+}
+
 /// 跑一次聚合搜索：每个源的结果到达就回调一次；到截止时间把没回来的记超时。
 #[cfg(test)]
 pub fn run<F: FnMut(Part)>(

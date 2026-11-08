@@ -182,6 +182,8 @@ pub struct App {
     bad_songs: std::collections::HashSet<String>,
     /// 连续跳过次数，超过 5 就停
     skip_streak: u32,
+    /// 已经处理过的 mpv 失败序号（未播放过是 0）
+    last_mpv_error: u64,
     favorites: Favorites,
     tx: Sender<AppMsg>,
     rx: Receiver<AppMsg>,
@@ -321,6 +323,7 @@ impl App {
             agg_playlist_candidates: std::collections::HashMap::new(),
             bad_songs: std::collections::HashSet::new(),
             skip_streak: 0,
+            last_mpv_error: 0,
             source_id: if !settings.source.is_empty()
                 && (settings.source == AGGREGATE_ID || registry.get(&settings.source).is_some())
             {
@@ -636,6 +639,13 @@ impl App {
 
     fn tick(&mut self) {
         let st = self.player.state();
+        // mpv 加载失败（403/失效链接/解码不了）必须让用户看见，并自动跳到下一首
+        if st.error_seq != self.last_mpv_error {
+            self.last_mpv_error = st.error_seq;
+            if let Some(e) = st.error.clone() {
+                self.skip_unplayable(Some(format!("mpv: {e}")));
+            }
+        }
         // 播完一首：按播放顺序决定下一首；顺序模式播到末尾就停住。
         // prev_eof 用来去重，避免 eof 一直为真时每帧都推进。
         // keep-open 下播完可能同时 paused=true，所以这里不能用 paused 当门禁；
@@ -2107,19 +2117,28 @@ impl App {
                 format!("连续 5 首无法播放（最后一首: {}），已停下{tail}", song.name),
                 Instant::now(),
             ));
+            self.now_playing = None;
+            self.queue_idx = None;
             return;
         }
         self.skip_streak += 1;
         let Some(idx) = self.queue_idx else { return };
         let n = self.queue.len();
         if n <= 1 {
+            let reason = match &why {
+                Some(w) => format!("：{w}"),
+                None => String::new(),
+            };
             self.toast = Some((
                 format!(
-                    "无法播放: {}（{}），队列里没有别的歌了",
-                    song.name, song.source
+                    "无法播放: {}（{}），队列里没有别的歌了{reason}",
+                    song.name,
+                    crate::source::source_display(&song.source)
                 ),
                 Instant::now(),
             ));
+            self.now_playing = None;
+            self.queue_idx = None;
             return;
         }
         let blocked: Vec<bool> = self
@@ -2159,11 +2178,14 @@ impl App {
                 self.toast = Some((
                     format!(
                         "无法播放: {}（{}），队列里没有其它可播的曲目",
-                        song.name, song.source
+                        song.name,
+                        crate::source::source_display(&song.source)
                     ),
                     Instant::now(),
                 ));
                 self.skip_streak = 0;
+                self.now_playing = None;
+                self.queue_idx = None;
             }
         }
     }
@@ -2455,11 +2477,15 @@ impl App {
         self.lazy_duration_for(&song);
         // 聚合结果里同一首可能来自多个源：按优先级逐个试流，第一个成功的就用
         let candidates = self.play_candidates(&song);
+        // 单源（不是聚合）时，主源取不到流要能跨源找同一首；聚合模式候选本来就有全网条目
+        let single_source = self.source_id != AGGREGATE_ID;
+        let fallback_query = format!("{} {}", song.name, crate::util::artists_of(&song.ar));
         let registry = self.registry.clone();
+        let registry_probe = self.registry.clone();
         let proxy_cfg = self.cfg.proxy.clone();
         spawn(tx.clone(), move || {
             // 按优先级逐个试，逻辑在 agg::first_playable（有单测）
-            let (hit, failures) = crate::source::agg::first_playable(&candidates, |cand| {
+            let mut try_one = |cand: &crate::models::Song| -> Result<Option<String>, String> {
                 let src = if cand.source.is_empty() {
                     "netease".to_string()
                 } else {
@@ -2469,7 +2495,22 @@ impl App {
                 registry
                     .stream_url(&src, &track, &quality)
                     .map_err(|e| e.to_string())
-            });
+            };
+            let (mut hit, mut failures) =
+                crate::source::agg::first_playable(&candidates, &mut try_one);
+            if hit.is_none() && single_source {
+                // 主源失败：拿「歌名 + 歌手」去其它源补候选再试一轮
+                let extra = crate::source::agg::fallback_candidates(
+                    &registry_probe,
+                    &candidates,
+                    &fallback_query,
+                );
+                if !extra.is_empty() {
+                    let (h2, mut f2) = crate::source::agg::first_playable(&extra, &mut try_one);
+                    failures.append(&mut f2);
+                    hit = h2;
+                }
+            }
             match hit {
                 Some((u, used)) => {
                     let mpv_proxy =

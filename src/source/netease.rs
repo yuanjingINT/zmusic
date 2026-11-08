@@ -245,6 +245,96 @@ impl crate::source::Source for NetEaseSource {
             .song_url_v1(&[numeric_id(id)?], quality)?
             .into_iter()
             .next()
-            .and_then(|u| u.url))
+            .and_then(accept_stream))
+    }
+}
+
+/// `/song/url/v1` 的返回值里 `url` 非空**不代表能播**：
+/// 原曲拿不到时 ncm-api 会给一条第三方兜底链接（`code=404`、`br=0`、`size=0`），
+/// 直接塞给 mpv 就是「界面在播、其实没声」。
+///
+/// 判定规则：
+/// - `url` 空 → 不可播
+/// - `code=200` 且 `br>0`/`size>0` → 可播
+/// - `code=200` 但码率、体积都是 0（有的源不填）→ 发一次 Range 探测再决定，
+///   避免把「br 缺失但真能播」的歌误杀
+/// - 其它 code（404 等兜底链接）→ 同样探测一次，能取到才算可播
+fn accept_stream(u: crate::models::SongUrl) -> Option<String> {
+    let url = u.url.filter(|s| !s.is_empty())?;
+    let code_ok = u.code.map(|c| c == 200).unwrap_or(true);
+    let has_meta = u.br.unwrap_or(0) > 0 || u.size.unwrap_or(0) > 0;
+    if code_ok && has_meta {
+        return Some(url);
+    }
+    if probe_playable(&url) {
+        Some(url)
+    } else {
+        None
+    }
+}
+
+/// 用 1 字节 Range 探一次能不能取到音频；任何非 2xx 都算不可播。
+fn probe_playable(url: &str) -> bool {
+    let resp = crate::source::http::client()
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .timeout(std::time::Duration::from_secs(3))
+        .send();
+    match resp {
+        Ok(r) => r.status().is_success() || r.status().as_u16() == 206,
+        Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod accept_tests {
+    use super::accept_stream;
+    use crate::models::SongUrl;
+
+    fn u(url: Option<&str>, code: Option<i32>, br: Option<i64>, size: Option<i64>) -> SongUrl {
+        SongUrl {
+            url: url.map(|s| s.to_string()),
+            code,
+            br,
+            size,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn empty_url_is_unplayable() {
+        assert!(accept_stream(u(None, Some(200), Some(128000), Some(1))).is_none());
+        assert!(accept_stream(u(Some(""), Some(200), Some(128000), Some(1))).is_none());
+    }
+
+    #[test]
+    fn code_200_with_bitrate_is_playable() {
+        assert_eq!(
+            accept_stream(u(Some("http://x/a.mp3"), Some(200), Some(128000), Some(0))).as_deref(),
+            Some("http://x/a.mp3")
+        );
+    }
+
+    #[test]
+    fn code_404_without_probe_is_rejected() {
+        // 本机没有这个地址：探测会失败，于是 404 兜底链接被判不可播
+        assert!(accept_stream(u(
+            Some("http://127.0.0.1:9/dead.mp3"),
+            Some(404),
+            Some(0),
+            Some(0)
+        ))
+        .is_none());
+    }
+
+    #[test]
+    fn code_200_without_metadata_probes_and_rejects_dead_link() {
+        assert!(accept_stream(u(
+            Some("http://127.0.0.1:9/dead.mp3"),
+            Some(200),
+            Some(0),
+            Some(0)
+        ))
+        .is_none());
     }
 }

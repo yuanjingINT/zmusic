@@ -160,6 +160,10 @@ pub struct SongUrl {
     pub fee: Option<i32>,
     pub free_trial_info: Option<serde_json::Value>,
     pub size: Option<i64>,
+    /// 200 = 真拿到流；404 等表示「原曲拿不到，这只是第三方兜底链接」
+    pub code: Option<i32>,
+    /// 码率：兜底链接常常是 0，需要额外探测才能判断能不能播
+    pub br: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
