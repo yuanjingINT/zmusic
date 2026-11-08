@@ -1,4 +1,5 @@
 pub mod screens;
+mod nav;
 mod search_keys;
 mod theme;
 
@@ -10,6 +11,7 @@ use crate::models::{ArtistInfo, Lyrics, Playlist, RecAlbum, SearchResult, Song};
 use crate::player::Player;
 use crate::settings::Settings;
 use crate::superdl::{self, UsbDevice};
+use nav::NavStack;
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -33,7 +35,7 @@ pub const MENU_ITEMS: [&str; 8] = [
     "设置",
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScreenKind {
     Menu,
     Search,
@@ -103,7 +105,7 @@ pub struct App {
     rx: Receiver<AppMsg>,
 
     screen: ScreenKind,
-    back: Option<ScreenKind>,
+    nav: NavStack,
     menu_sel: usize,
 
     selected: HashSet<i64>,
@@ -183,7 +185,7 @@ impl App {
             tx,
             rx,
             screen: ScreenKind::Menu,
-            back: None,
+            nav: NavStack::default(),
             menu_sel: 0,
             selected: HashSet::new(),
             playlists: Vec::new(),
@@ -614,7 +616,7 @@ impl App {
         if self.screen == kind {
             return;
         }
-        self.back = Some(self.screen);
+        self.nav.enter(self.screen);
         self.screen = kind;
         self.selected.clear();
         self.ctx_open = false;
@@ -944,8 +946,10 @@ impl App {
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc => {
-                if let Some(back) = self.back.take() {
-                    self.screen = back;
+                // 出栈一层；栈空时什么都不做（不退出、不跳菜单）
+                if let Some(prev) = self.nav.leave() {
+                    self.screen = prev;
+                    self.ctx_open = false;
                 }
             }
             KeyCode::Char('h') => self.goto(ScreenKind::Menu),
@@ -1033,7 +1037,17 @@ impl App {
                     self.do_search(q);
                 }
             }
-            KeyCode::Esc => self.search_input_focus = false,
+            KeyCode::Esc => {
+                // 有内容先收焦点（还能继续看结果）；空串直接回上一页
+                if self.search_input.is_empty() {
+                    if let Some(prev) = self.nav.leave() {
+                        self.screen = prev;
+                        self.search_input_focus = false;
+                    }
+                } else {
+                    self.search_input_focus = false;
+                }
+            }
             _ => {}
         }
     }
@@ -1287,7 +1301,7 @@ impl App {
         self.play_gen += 1;
         self.play_current();
         self.selected.clear();
-        self.screen = ScreenKind::NowPlaying;
+        self.goto(ScreenKind::NowPlaying);
     }
 
     fn play_current(&mut self) {
