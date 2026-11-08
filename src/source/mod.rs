@@ -10,6 +10,7 @@ pub mod ccmixter;
 pub mod http;
 pub mod jamendo;
 pub mod meting;
+pub mod migu;
 pub mod netease;
 pub mod opengameart;
 pub mod qq;
@@ -158,6 +159,7 @@ impl SourceRegistry {
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
         reg.register(Arc::new(qq::QqSource::new()));
         reg.register(Arc::new(bilibili::BilibiliSource::new()));
+        reg.register(Arc::new(migu::MiguSource::new()));
         for server in ["tencent", "kugou", "baidu", "kuwo"] {
             reg.register(Arc::new(meting::MetingSource::new(
                 meting_base.clone(),
@@ -242,6 +244,7 @@ mod tests {
         assert!(reg.get("youtube").is_some(), "YouTube 也应默认注册");
         assert!(reg.get("soundcloud").is_some(), "SoundCloud 应默认注册");
         assert!(reg.get("bilibili").is_some(), "bilibili 应默认注册");
+        assert!(reg.get("migu").is_some(), "咪咕应默认注册");
         assert!(reg.get("bandcamp").is_none(), "Bandcamp 无搜索入口，不注册");
         assert!(reg.get("spotify").is_none());
     }
