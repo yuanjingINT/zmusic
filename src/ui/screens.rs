@@ -383,7 +383,7 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
         Style::default()
     };
     let input = Paragraph::new(Line::from(Span::styled(
-        format!(" 🔍 {}", app.search_input),
+        format!(" {} ", app.search_input),
         style,
     )))
     .block(
@@ -393,7 +393,7 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
     );
     f.render_widget(input, input_area);
     if app.search_input_focus {
-        let x = (input_area.x + 1 + app.search_input.width() as u16)
+        let x = (input_area.x + 2 + app.search_input.width() as u16)
             .min(input_area.right().saturating_sub(1));
         f.set_cursor_position((x, input_area.y + 1));
     }
