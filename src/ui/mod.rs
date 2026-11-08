@@ -95,7 +95,15 @@ pub(crate) enum AppMsg {
         resp: Sender<Result<(), String>>,
     },
     Enqueue(Result<Vec<Song>, String>),
-    PlayUrl(u64, Option<String>, bool, Option<String>),
+    /// gen, url, autoplay, mpv_proxy, 实际成功的源, 各源失败原因
+    PlayUrl(
+        u64,
+        Option<String>,
+        bool,
+        Option<String>,
+        Option<(String, String)>,
+        Vec<(String, String)>,
+    ),
     Lyric(u64, Option<Lyrics>),
     /// 后台探测单个源的结果
     Probe {
@@ -162,6 +170,8 @@ pub struct App {
     duration_asked: std::collections::HashSet<String>,
     /// 聚合去重后，每一行被哪些源命中（来源列显示「网易云+QQ(直连)」）
     agg_sources: std::collections::HashMap<String, Vec<String>>,
+    /// 同一首歌在各源上的完整条目：主源取不到流时按优先级换源重试
+    agg_candidates: std::collections::HashMap<String, Vec<Song>>,
     /// 取不到流的曲目（本次会话跳过，随机模式不再撞）
     bad_songs: std::collections::HashSet<String>,
     /// 连续跳过次数，超过 5 就停
@@ -262,6 +272,16 @@ impl App {
         // settings 里的音质可能覆盖了环境变量，共享给下载器
         *quality.write().unwrap() = cfg.quality.clone();
         let (tx, rx) = channel();
+        // 冷启动预热：网易云 API 的首次搜索要 2s 左右（上游），提前打一次，
+        // 用户输入关键词时就不用等这一下。结果丢弃，不影响 UI。
+        {
+            let api = NetEaseSource::clone(&api);
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let _ = api.search("a", 1, crate::source::SearchKind::Song);
+                drop(tx);
+            });
+        }
         let mut app = App {
             cfg,
             api,
@@ -282,6 +302,7 @@ impl App {
             source_sel: 0,
             duration_asked: std::collections::HashSet::new(),
             agg_sources: std::collections::HashMap::new(),
+            agg_candidates: std::collections::HashMap::new(),
             bad_songs: std::collections::HashSet::new(),
             skip_streak: 0,
             source_id: if !settings.source.is_empty()
@@ -691,9 +712,16 @@ impl App {
                         Ok(v) => {
                             for song in &v.songs {
                                 let key = health::dedup_key(song);
-                                let list = self.agg_sources.entry(key).or_default();
+                                let list = self.agg_sources.entry(key.clone()).or_default();
                                 if !list.contains(&song.source) {
                                     list.push(song.source.clone());
+                                }
+                                let cands = self.agg_candidates.entry(key).or_default();
+                                if !cands
+                                    .iter()
+                                    .any(|c| c.source == song.source && c.s_id == song.s_id)
+                                {
+                                    cands.push(song.clone());
                                 }
                             }
                             // 代表源按优先级：后到的网易云会顶掉先到的咪咕
@@ -838,13 +866,37 @@ impl App {
                         self.toast = Some((format!("获取歌单曲目失败: {}", e), Instant::now()))
                     }
                 },
-                AppMsg::PlayUrl(gen, url, autoplay, proxy) => {
+                AppMsg::PlayUrl(gen, url, autoplay, proxy, used, failures) => {
                     if gen == self.play_gen {
                         // mpv 的 http-proxy 按曲目切：yt-dlp 系源走代理，其他源清空
                         self.player.set_http_proxy(proxy.as_deref());
                         match url {
                             Some(u) => {
                                 self.skip_streak = 0;
+                                // 换源成功：把队列/正在播放这首歌的条目改成真正用的源，
+                                // 让「源」列、i 弹窗、收藏都反映实际来源
+                                if let Some((src, s_id)) = used {
+                                    if let Some(cur) = self.now_playing.as_mut() {
+                                        if cur.source != src {
+                                            let mut fixed = cur.clone();
+                                            fixed.source = src.clone();
+                                            fixed.s_id = s_id.clone();
+                                            *cur = fixed.clone();
+                                            if let Some(i) = self.queue_idx {
+                                                if let Some(q) = self.queue.get_mut(i) {
+                                                    *q = fixed;
+                                                }
+                                            }
+                                            self.toast = Some((
+                                                format!(
+                                                    "主源取不到流，已换 {} 播放",
+                                                    crate::source::source_display(&src)
+                                                ),
+                                                Instant::now(),
+                                            ));
+                                        }
+                                    }
+                                }
                                 if autoplay {
                                     self.player.load_play(&u);
                                 } else {
@@ -856,8 +908,18 @@ impl App {
                                 }
                             }
                             None => {
-                                // 取不到流就跳过接着放，别停在「标题变了没声音」
-                                self.skip_unplayable();
+                                // 所有备选源都失败：把每个源的原因带上，再跳过
+                                let detail = if failures.is_empty() {
+                                    None
+                                } else {
+                                    let items: Vec<String> = failures
+                                        .iter()
+                                        .take(4)
+                                        .map(|(s, why)| format!("{s}: {why}"))
+                                        .collect();
+                                    Some(format!("所有源均取不到流（{}）", items.join(" / ")))
+                                };
+                                self.skip_unplayable(detail);
                             }
                         }
                     }
@@ -1603,6 +1665,8 @@ impl App {
         if srcs.is_empty() {
             return;
         }
+        // 重探同时清掉聚合结果缓存，避免拿旧结果糊弄
+        crate::source::agg::clear_cache();
         self.probe_gen += 1;
         let gen = self.probe_gen;
         self.probe_total = srcs.len();
@@ -1685,6 +1749,7 @@ impl App {
         self.search.clear();
         self.agg_index.clear();
         self.agg_sources.clear();
+        self.agg_candidates.clear();
         self.agg_failed.clear();
         self.search_sel = 0;
         self.selected.clear();
@@ -1711,50 +1776,18 @@ impl App {
                 targets.push(("netease".to_string(), src));
             }
         }
-        let ids: Vec<String> = targets.iter().map(|(id, _)| id.clone()).collect();
         let tx = self.tx.clone();
+        let cfg = crate::source::agg::Config::default();
         thread::spawn(move || {
-            let (ptx, prx) = std::sync::mpsc::channel::<(String, Result<SearchResult, String>)>();
-            let queue = Arc::new(std::sync::Mutex::new(targets));
-            let workers = health::CONCURRENCY.clamp(1, ids.len().max(1));
-            for _ in 0..workers {
-                let queue = queue.clone();
-                let ptx = ptx.clone();
-                let q = q.clone();
-                thread::spawn(move || loop {
-                    let item = { queue.lock().unwrap().pop() };
-                    let Some((id, src)) = item else { break };
-                    let r = src
-                        .search(&q, 20, crate::source::SearchKind::Song)
-                        .map_err(|e| e.to_string());
-                    if ptx.send((id, r)).is_err() {
-                        break;
-                    }
+            let stats = crate::source::agg::run(targets, &q, 20, cfg, |p| {
+                let _ = tx.send(AppMsg::AggPart {
+                    gen,
+                    id: p.id,
+                    result: p.result,
                 });
-            }
-            drop(ptx);
-            let deadline = Instant::now() + health::AGG_TIMEOUT;
-            let mut answered: Vec<String> = Vec::new();
-            while answered.len() < ids.len() {
-                let left = deadline.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    break;
-                }
-                match prx.recv_timeout(left) {
-                    Ok((id, r)) => {
-                        answered.push(id.clone());
-                        if tx.send(AppMsg::AggPart { gen, id, result: r }).is_err() {
-                            return;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            let failed: Vec<String> = ids
-                .iter()
-                .filter(|id| !answered.contains(id))
-                .map(|id| format!("{id}(超时)"))
-                .collect();
+            });
+            let mut failed: Vec<String> = stats.timed_out_ids.clone();
+            failed.extend(stats.failed_ids.iter().map(|id| format!("{id}: 失败")));
             let _ = tx.send(AppMsg::AggDone { gen, failed });
         });
     }
@@ -1861,10 +1894,14 @@ impl App {
                     // 同一首被多个源命中时全列出来，顺序也按优先级：「网易云+QQ(直连)」
                     let mut ids = list.clone();
                     ids.sort_by(|a, b| crate::source::by_source_priority(a, b));
-                    let labels: Vec<String> = ids
+                    let mut labels: Vec<String> = ids
                         .iter()
                         .map(|id| crate::source::source_display(id))
                         .collect();
+                    // 网易云付费曲目提前标出来，别等点了才知道
+                    if s.source == "netease" && s.fee != 0 {
+                        labels.push("会员".to_string());
+                    }
                     return (labels.join("+"), can || ids.len() > 1);
                 }
             }
@@ -1881,7 +1918,7 @@ impl App {
     }
 
     /// 播放地址拿不到：记下这首、跳过它、按播放顺序继续
-    fn skip_unplayable(&mut self) {
+    fn skip_unplayable(&mut self, why: Option<String>) {
         let Some(song) = self.now_playing.clone() else {
             return;
         };
@@ -1889,8 +1926,12 @@ impl App {
         self.bad_songs.insert(key);
         if self.skip_streak >= 5 {
             self.skip_streak = 0;
+            let tail = match &why {
+                Some(w) => format!("；{w}"),
+                None => String::new(),
+            };
             self.toast = Some((
-                format!("连续 5 首无法播放（最后一首: {}），已停下", song.name),
+                format!("连续 5 首无法播放（最后一首: {}），已停下{tail}", song.name),
                 Instant::now(),
             ));
             return;
@@ -1924,10 +1965,16 @@ impl App {
         match next_idx {
             Some(ni) => {
                 let next_name = self.queue[ni].name.clone();
+                let reason = match &why {
+                    Some(w) => format!("：{w}"),
+                    None => String::new(),
+                };
                 self.toast = Some((
                     format!(
-                        "跳过无法播放: {}（{}）→ 接着放 {}",
-                        song.name, song.source, next_name
+                        "跳过无法播放: {}（{}）{reason} → 接着放 {}",
+                        song.name,
+                        crate::source::source_display(&song.source),
+                        next_name
                     ),
                     Instant::now(),
                 ));
@@ -2190,6 +2237,22 @@ impl App {
         self.goto(ScreenKind::NowPlaying);
     }
 
+    /// 这首歌在聚合里命中过的所有源条目，按优先级排序；非聚合模式就是它自己
+    fn play_candidates(&self, song: &Song) -> Vec<Song> {
+        let mut list: Vec<Song> = if self.source_id == AGGREGATE_ID {
+            self.agg_candidates
+                .get(&health::dedup_key(song))
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if list.is_empty() {
+            list.push(song.clone());
+        }
+        crate::source::agg::order_candidates(&list)
+    }
+
     /// `autoplay = true`：加载后强制播放（自动连播／用户点播）；
     /// `false`：只加载，保持当前暂停状态（手动切歌、切音质重取流）
     fn play_current(&mut self, autoplay: bool) {
@@ -2204,28 +2267,45 @@ impl App {
         let quality = self.cfg.quality.clone();
         let id = song.id;
         self.lazy_duration_for(&song);
-        // 按歌曲自带的 source 去找对应的源取流（混源队列靠这一步）
+        // 聚合结果里同一首可能来自多个源：按优先级逐个试流，第一个成功的就用
+        let candidates = self.play_candidates(&song);
         let registry = self.registry.clone();
-        let source = if song.source.is_empty() {
-            "netease".to_string()
-        } else {
-            song.source.clone()
-        };
-        let track = crate::source::track_of(&song);
-        // 走 yt-dlp 的源（YouTube/SoundCloud）直链绑出口：mpv 必须和 yt-dlp 同一代理
-        let mpv_proxy = if crate::source::ytdlp::YtDlpSource::needs_proxy_for(&source) {
-            crate::proxy::mpv_proxy(self.cfg.proxy.as_deref())
-                .ok()
-                .flatten()
-        } else {
-            None
-        };
+        let proxy_cfg = self.cfg.proxy.clone();
         spawn(tx.clone(), move || {
-            let url = registry
-                .stream_url(&source, &track, &quality)
-                .ok()
-                .flatten();
-            AppMsg::PlayUrl(gen, url, autoplay, mpv_proxy)
+            let mut failures: Vec<(String, String)> = Vec::new();
+            for cand in &candidates {
+                let src = if cand.source.is_empty() {
+                    "netease".to_string()
+                } else {
+                    cand.source.clone()
+                };
+                let track = crate::source::track_of(cand);
+                match registry.stream_url(&src, &track, &quality) {
+                    Ok(Some(u)) => {
+                        // 取到流了：mpv 的代理按真正用的那个源决定
+                        let mpv_proxy = if crate::source::ytdlp::YtDlpSource::needs_proxy_for(&src)
+                        {
+                            crate::proxy::mpv_proxy(proxy_cfg.as_deref()).ok().flatten()
+                        } else {
+                            None
+                        };
+                        return AppMsg::PlayUrl(
+                            gen,
+                            Some(u),
+                            autoplay,
+                            mpv_proxy,
+                            Some((src.clone(), cand.s_id.clone())),
+                            failures,
+                        );
+                    }
+                    Ok(None) => failures.push((
+                        crate::source::source_display(&src),
+                        "需会员或无版权".to_string(),
+                    )),
+                    Err(e) => failures.push((crate::source::source_display(&src), e.to_string())),
+                }
+            }
+            AppMsg::PlayUrl(gen, None, autoplay, None, None, failures)
         });
         let api2 = self.api.clone();
         spawn(tx, move || {

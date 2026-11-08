@@ -184,6 +184,10 @@ impl Source for BilibiliSource {
         "国内"
     }
 
+    fn is_subprocess(&self) -> bool {
+        true
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             kinds: vec![SearchKind::Song],

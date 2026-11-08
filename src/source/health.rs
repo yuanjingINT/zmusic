@@ -15,8 +15,6 @@ use crate::source::Source;
 
 /// 探测结果 TTL
 pub const DEFAULT_TTL: Duration = Duration::from_secs(600);
-/// 单源聚合搜索超时
-pub const AGG_TIMEOUT: Duration = Duration::from_secs(5);
 /// 聚合/探测的并发上限
 pub const CONCURRENCY: usize = 4;
 

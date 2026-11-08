@@ -4,6 +4,7 @@
 //! 这一版先把接口定型：ID 用字符串包装（YouTube 是 `dQw4w9WgXcQ` 这种）、
 //! 搜索类型用枚举（不再把网易云的 1/100/1000/10 漏到上层）。
 
+pub mod agg;
 pub mod audius;
 pub mod bilibili;
 pub mod ccmixter;
@@ -112,6 +113,11 @@ pub trait Source: Send + Sync {
     fn lyric(&self, id: &TrackId) -> Result<Lyrics>;
     /// 取播放地址；拿不到（无版权/需会员/流过期）时返回 Ok(None)
     fn stream_url(&self, id: &TrackId, quality: &str) -> Result<Option<String>>;
+    /// 会不会 fork 子进程（yt-dlp / bilibili 取流）：聚合时单独限流，避免 fork 风暴
+    fn is_subprocess(&self) -> bool {
+        false
+    }
+
     /// 懒补时长：搜索接口不带时长的源（Meting）在选中/播放时问一次，默认不支持
     fn duration_ms(&self, _id: &TrackId) -> Result<Option<i64>> {
         Ok(None)

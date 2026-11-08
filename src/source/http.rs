@@ -10,7 +10,12 @@ pub fn client() -> &'static Client {
     static CLI: OnceLock<Client> = OnceLock::new();
     CLI.get_or_init(|| {
         Client::builder()
-            .timeout(Duration::from_secs(25))
+            // 搜索用的客户端：连接复用拉满、建连 2s 就放弃，总超时 6s
+            // （早期 25s 会把聚合拖到截止时间之后，白等）
+            .timeout(Duration::from_secs(6))
+            .connect_timeout(Duration::from_secs(2))
+            .pool_max_idle_per_host(16)
+            .tcp_nodelay(true)
             .user_agent("zmusic/0.1 (+https://git.tuxai.org/personal/zmusic)")
             .build()
             .expect("构建 HTTP client 失败")

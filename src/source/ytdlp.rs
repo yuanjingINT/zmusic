@@ -323,6 +323,10 @@ impl Source for YtDlpSource {
         }
     }
 
+    fn is_subprocess(&self) -> bool {
+        true
+    }
+
     fn is_available(&self) -> bool {
         self.probe()
     }
