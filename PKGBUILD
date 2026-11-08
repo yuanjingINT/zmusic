@@ -23,6 +23,8 @@ sha256sums=('3c8cbf60d1fedad9504598d9d25f20b79934d1ee74da35aa2e9b55758b7a1c4e')
 build() {
   cd "$srcdir/$pkgname-$_commit"
   export CARGO_HOME="$srcdir/cargo-home"
+  # 构建可复现：别把家目录/构建目录的绝对路径嵌进二进制（panic 的 Location::file 会带）
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build/zmusic --remap-path-prefix=$HOME=/build/home"
   cargo build --release --locked
 }
 

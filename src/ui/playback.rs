@@ -77,6 +77,42 @@ pub fn next_index(len: usize, idx: usize, mode: PlayMode, seed: u64) -> Option<u
     }
 }
 
+/// 取流失败后找下一首：跳过 `blocked[i] == true` 的曲目（取不到流 / 仅搜索的源）。
+///
+/// - `Sequential`：往后扫，扫到末尾就停（不回绕，保持"播完就停"的语义）
+/// - `Shuffle`：用 `seed` 只抽一个候选，抽到坏的继续抽，最多 `len-1` 次
+/// - `RepeatOne`：不跳（单曲循环遇到取不到流就该停，不能偷偷换歌）
+pub fn next_playable(
+    len: usize,
+    idx: usize,
+    mode: PlayMode,
+    blocked: &[bool],
+    seed: u64,
+) -> Option<usize> {
+    if len == 0 || blocked.len() != len || mode == PlayMode::RepeatOne {
+        return None;
+    }
+    let idx = idx.min(len - 1);
+    match mode {
+        PlayMode::Sequential => (idx + 1..len).find(|i| !blocked[*i]),
+        PlayMode::Shuffle => {
+            let mut state = seed;
+            for _ in 0..len.saturating_sub(1) {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let offset = 1 + (state % (len as u64 - 1)) as usize;
+                let cand = (idx + offset) % len;
+                if !blocked[cand] {
+                    return Some(cand);
+                }
+            }
+            None
+        }
+        PlayMode::RepeatOne => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +178,62 @@ mod tests {
         for m in PlayMode::ALL {
             assert!(!m.label().is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod playable_tests {
+    use super::*;
+
+    #[test]
+    fn sequential_skips_blocked_and_stops_at_end() {
+        let blocked = [false, false, true, false];
+        assert_eq!(
+            next_playable(4, 0, PlayMode::Sequential, &blocked, 0),
+            Some(1)
+        );
+        // 从 1 往后：2 被挡 → 3
+        assert_eq!(
+            next_playable(4, 1, PlayMode::Sequential, &blocked, 0),
+            Some(3)
+        );
+        // 3 是最后一首 → 停
+        assert_eq!(next_playable(4, 3, PlayMode::Sequential, &blocked, 0), None);
+        // 末尾被挡也不回绕
+        let blocked = [false, true, false, true];
+        assert_eq!(next_playable(4, 2, PlayMode::Sequential, &blocked, 0), None);
+    }
+
+    #[test]
+    fn all_blocked_yields_none() {
+        let blocked = [true, true, true];
+        for mode in [PlayMode::Sequential, PlayMode::Shuffle] {
+            assert_eq!(next_playable(3, 0, mode, &blocked, 7), None);
+        }
+    }
+
+    #[test]
+    fn repeat_one_never_switches_song_even_if_blocked() {
+        let blocked = [true, false];
+        assert_eq!(next_playable(2, 0, PlayMode::RepeatOne, &blocked, 0), None);
+    }
+
+    #[test]
+    fn shuffle_never_returns_blocked_or_current() {
+        let blocked = [false, true, false, false, true];
+        for seed in 0..40u64 {
+            if let Some(i) = next_playable(5, 0, PlayMode::Shuffle, &blocked, seed) {
+                assert!(!blocked[i]);
+                assert_ne!(i, 0);
+            }
+        }
+        // 只剩当前可播时没有别的可跳
+        let blocked = [false, true, true];
+        assert_eq!(next_playable(3, 0, PlayMode::Shuffle, &blocked, 1), None);
+    }
+
+    #[test]
+    fn bad_blocked_len_is_rejected() {
+        assert_eq!(next_playable(3, 0, PlayMode::Sequential, &[false], 0), None);
     }
 }

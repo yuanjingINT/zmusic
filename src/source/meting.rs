@@ -4,7 +4,7 @@
 use crate::models::{Album, Artist, Lyrics, SearchResult, Song};
 use crate::source::http;
 use crate::source::{Capabilities, SearchKind, Source, TrackId};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 pub struct MetingSource {
@@ -98,6 +98,30 @@ pub fn parse_url(v: &Value) -> Option<String> {
         .map(|u| u.to_string())
 }
 
+impl MetingSource {
+    /// cookie 只从环境变量读（`ZMUSIC_METING_COOKIE`），不落盘、不进日志。
+    fn cookie() -> Option<String> {
+        std::env::var("ZMUSIC_METING_COOKIE")
+            .ok()
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty() && c.len() < 8192)
+    }
+
+    /// 带 cookie 头发一次 GET；侧车的 cookie 优先取这个头
+    fn get(&self, path: &str) -> Result<Value> {
+        let url = format!("{}/api?{}", self.base, path);
+        let mut req = http::client().get(&url);
+        if let Some(c) = Self::cookie() {
+            req = req.header("x-meting-cookie", c);
+        }
+        let resp = req.send().with_context(|| format!("请求侧车失败: {url}"))?;
+        if !resp.status().is_success() {
+            return Err(anyhow::anyhow!("侧车 HTTP {}: {url}", resp.status()));
+        }
+        resp.json().context("侧车返回的不是 JSON")
+    }
+}
+
 impl Source for MetingSource {
     fn id(&self) -> &'static str {
         self.id_str
@@ -112,28 +136,28 @@ impl Source for MetingSource {
     }
 
     fn capabilities(&self) -> Capabilities {
+        // 没 cookie 时 tencent/kugou 能搜不能出流：标「仅搜索」，聚合不并进播放队列。
+        // baidu/kuwo 上游本身返回空壳，配了 cookie 也当不能播。
+        let with_creds = Self::cookie().is_some() && matches!(self.server, "tencent" | "kugou");
         Capabilities {
             kinds: vec![SearchKind::Song],
             lyrics: false,
             qualities: Vec::new(),
+            can_stream: with_creds,
         }
     }
 
     fn is_available(&self) -> bool {
-        http::get_json(&format!(
-            "{}/api?server={}&type=search&id=a&limit=1",
-            self.base, self.server
-        ))
-        .is_ok()
+        self.get(&format!("server={}&type=search&id=a&limit=1", self.server))
+            .is_ok()
     }
 
     fn search(&self, keyword: &str, limit: i32, kind: SearchKind) -> Result<SearchResult> {
         if kind != SearchKind::Song {
             return Ok(SearchResult::default());
         }
-        let v = http::get_json(&format!(
-            "{}/api?server={}&type=search&id={}&limit={}",
-            self.base,
+        let v = self.get(&format!(
+            "server={}&type=search&id={}&limit={}",
             self.server,
             http::enc(keyword),
             limit.clamp(1, 30)
@@ -149,13 +173,26 @@ impl Source for MetingSource {
     }
 
     fn stream_url(&self, id: &TrackId, _quality: &str) -> Result<Option<String>> {
-        let v = http::get_json(&format!(
-            "{}/api?server={}&type=url&id={}&br=320",
-            self.base,
+        let v = self.get(&format!(
+            "server={}&type=url&id={}&br=320",
             self.server,
             http::enc(id.as_str())
         ))?;
         Ok(parse_url(&v))
+    }
+
+    /// 懒补时长：Meting 搜索不给时长，选中/播放时补一次
+    fn duration_ms(&self, id: &TrackId) -> Result<Option<i64>> {
+        let v = self.get(&format!(
+            "server={}&type=duration&id={}",
+            self.server,
+            http::enc(id.as_str())
+        ))?;
+        let ms = v
+            .get("duration_ms")
+            .and_then(|x| x.as_i64())
+            .filter(|ms| *ms > 0);
+        Ok(ms)
     }
 }
 

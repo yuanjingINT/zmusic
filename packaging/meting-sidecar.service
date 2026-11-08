@@ -8,6 +8,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/usr/lib/zmusic/sidecar
 Environment=METING_PORT=8123
+# 可选：把 cookie 放在这个文件里（600），别写进 unit 正文或仓库
+EnvironmentFile=-%h/.config/zmusic/meting.env
 ExecStart=/usr/bin/node meting.js
 Restart=on-failure
 RestartSec=3

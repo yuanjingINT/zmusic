@@ -143,6 +143,7 @@ impl Source for MiguSource {
             kinds: vec![SearchKind::Song],
             lyrics: false,
             qualities: Vec::new(),
+            can_stream: true,
         }
     }
 

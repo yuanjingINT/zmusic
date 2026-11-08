@@ -11,6 +11,7 @@ use crate::favorites::Favorites;
 use crate::models::{ArtistInfo, Lyrics, Playlist, RecAlbum, SearchResult, Song};
 use crate::player::Player;
 use crate::settings::Settings;
+use crate::source::health::{self, SourceState};
 use crate::source::netease::NetEaseSource;
 use crate::source::SourceRegistry;
 use crate::superdl::{self, UsbDevice};
@@ -28,6 +29,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// 聚合伪源：搜索时并发问所有 `Ok` 的源再合并
+pub const AGGREGATE_ID: &str = "aggregate";
 
 pub const MENU_ITEMS: [&str; 8] = [
     "搜索音乐",
@@ -92,6 +96,31 @@ pub(crate) enum AppMsg {
     Enqueue(Result<Vec<Song>, String>),
     PlayUrl(u64, Option<String>, bool, Option<String>),
     Lyric(u64, Option<Lyrics>),
+    /// 后台探测单个源的结果
+    Probe {
+        gen: u64,
+        id: String,
+        state: SourceState,
+    },
+    ProbeDone {
+        gen: u64,
+    },
+    /// 聚合搜索：某个源的一批结果（按到达顺序合并）
+    AggPart {
+        gen: u64,
+        id: String,
+        result: Result<SearchResult, String>,
+    },
+    AggDone {
+        gen: u64,
+        failed: Vec<String>,
+    },
+    /// 懒补时长回来了
+    Duration {
+        source: String,
+        s_id: String,
+        dt: i64,
+    },
 }
 
 fn spawn<F: FnOnce() -> AppMsg + Send + 'static>(tx: Sender<AppMsg>, f: F) {
@@ -112,6 +141,27 @@ pub struct App {
     source_id: String,
     /// 搜索失败过的源（UI 置灰用），成功一次就清掉
     failed_sources: std::collections::HashSet<String>,
+    /// 源健康状态：后台探测写，渲染只读，绝不在这里发网络请求
+    health: health::HealthTable,
+    probe_gen: u64,
+    probe_total: usize,
+    probe_done: usize,
+    probe_started: Option<Instant>,
+    /// 聚合结果去重集合 + 每轮失败/超时的源
+    agg_seen: std::collections::HashSet<String>,
+    agg_failed: Vec<String>,
+    /// 搜索代数：切源/新搜索后旧结果直接丢
+    search_gen: u64,
+    /// 源列表是否显示离线的（V 键切换）
+    show_all_sources: bool,
+    /// 已经补过时长的曲目，避免重复请求
+    duration_asked: std::collections::HashSet<String>,
+    /// 聚合去重后，每一行被哪些源命中（来源列显示「网易云+QQ(直连)」）
+    agg_sources: std::collections::HashMap<String, Vec<String>>,
+    /// 取不到流的曲目（本次会话跳过，随机模式不再撞）
+    bad_songs: std::collections::HashSet<String>,
+    /// 连续跳过次数，超过 5 就停
+    skip_streak: u32,
     favorites: Favorites,
     tx: Sender<AppMsg>,
     rx: Receiver<AppMsg>,
@@ -215,7 +265,22 @@ impl App {
             downloader,
             quality,
             failed_sources: std::collections::HashSet::new(),
-            source_id: if !settings.source.is_empty() && registry.get(&settings.source).is_some() {
+            health: health::HealthTable::new(health::DEFAULT_TTL),
+            probe_gen: 0,
+            probe_total: 0,
+            probe_done: 0,
+            probe_started: None,
+            agg_seen: std::collections::HashSet::new(),
+            agg_failed: Vec::new(),
+            search_gen: 0,
+            show_all_sources: false,
+            duration_asked: std::collections::HashSet::new(),
+            agg_sources: std::collections::HashMap::new(),
+            bad_songs: std::collections::HashSet::new(),
+            skip_streak: 0,
+            source_id: if !settings.source.is_empty()
+                && (settings.source == AGGREGATE_ID || registry.get(&settings.source).is_some())
+            {
                 settings.source.clone()
             } else {
                 "netease".to_string()
@@ -303,6 +368,8 @@ impl App {
     }
 
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()> {
+        // 启动即后台探源：这里只起线程，不等待，界面照常进出
+        self.start_probe();
         loop {
             terminal.draw(|f| screens::render_all(f, self))?;
             if self.quit {
@@ -526,6 +593,7 @@ impl App {
             }
         }
         self.prev_eof = st.eof;
+        self.probe_timeout_check();
         if let Some((_, t)) = &self.toast {
             if t.elapsed() > Duration::from_secs(3) {
                 self.toast = None;
@@ -575,8 +643,11 @@ impl App {
                         Ok(_) => {
                             self.failed_sources.remove(&self.source_id);
                         }
-                        Err(_) => {
+                        Err(e) => {
+                            // 搜索失败就地更新健康状态：缺 key 归「需凭据」，其余归离线
                             self.failed_sources.insert(self.source_id.clone());
+                            let st = health::classify_error(&e.to_string());
+                            self.health.set(&self.source_id, st);
                         }
                     }
                     match r {
@@ -588,6 +659,83 @@ impl App {
                             self.search_sel = 0;
                         }
                         Err(e) => self.toast = Some((format!("搜索失败: {}", e), Instant::now())),
+                    }
+                }
+                AppMsg::Probe { gen, id, state } => {
+                    if gen == self.probe_gen {
+                        self.health.set(&id, state);
+                        self.probe_done += 1;
+                        if self.probe_done >= self.probe_total {
+                            self.probe_started = None;
+                        }
+                    }
+                }
+                AppMsg::ProbeDone { gen } => {
+                    if gen == self.probe_gen {
+                        self.probe_started = None;
+                        self.probe_done = self.probe_total;
+                    }
+                }
+                AppMsg::AggPart { gen, id, result } => {
+                    if gen != self.search_gen {
+                        continue; // 切词/切源后旧结果
+                    }
+                    self.search_loading = false;
+                    match result {
+                        Ok(v) => {
+                            for song in &v.songs {
+                                let key = health::dedup_key(song);
+                                let label = crate::source::source_display(&song.source);
+                                let list = self.agg_sources.entry(key).or_default();
+                                if !list.contains(&label) {
+                                    list.push(label);
+                                }
+                            }
+                            health::merge_songs(&mut self.search, &mut self.agg_seen, &v.songs);
+                            self.failed_sources.remove(&id);
+                        }
+                        Err(e) => {
+                            if !self.agg_failed.iter().any(|f| f.starts_with(&id)) {
+                                self.agg_failed.push(format!("{id}: {e}"));
+                            }
+                        }
+                    }
+                }
+                AppMsg::AggDone { gen, failed } => {
+                    if gen != self.search_gen {
+                        continue;
+                    }
+                    self.search_loading = false;
+                    for f in failed {
+                        self.agg_failed.push(f);
+                    }
+                    if self.search.is_empty() && !self.agg_failed.is_empty() {
+                        let msg = self.agg_failed.join("；");
+                        self.toast = Some((format!("聚合搜索全失败: {msg}"), Instant::now()));
+                    }
+                }
+                AppMsg::Duration { source, s_id, dt } => {
+                    if dt > 0 {
+                        let fix = |s: &mut Song| {
+                            if s.source == source && s.s_id == s_id {
+                                s.dt = dt;
+                            }
+                        };
+                        for s in self.search.iter_mut() {
+                            fix(s);
+                        }
+                        for s in self.queue.iter_mut() {
+                            fix(s);
+                        }
+                        for s in self.lib.iter_mut() {
+                            fix(s);
+                        }
+                        if let Some(s) = self.now_playing.as_mut() {
+                            fix(s);
+                        }
+                    } else {
+                        // 这次拿不到：允许换歌再试一次
+                        self.duration_asked.remove(&format!("{source}|{s_id}"));
                     }
                 }
                 AppMsg::PlaylistDetail(r) => {
@@ -684,6 +832,7 @@ impl App {
                         self.player.set_http_proxy(proxy.as_deref());
                         match url {
                             Some(u) => {
+                                self.skip_streak = 0;
                                 if autoplay {
                                     self.player.load_play(&u);
                                 } else {
@@ -695,13 +844,8 @@ impl App {
                                 }
                             }
                             None => {
-                                let name = self
-                                    .now_playing
-                                    .as_ref()
-                                    .map(|s| s.name.clone())
-                                    .unwrap_or_default();
-                                self.toast =
-                                    Some((format!("无法获取播放链接: {}", name), Instant::now()));
+                                // 取不到流就跳过接着放，别停在「标题变了没声音」
+                                self.skip_unplayable();
                             }
                         }
                     }
@@ -1053,6 +1197,20 @@ impl App {
                 }
                 search_keys::Nav::None => {}
             }
+            // 列表聚焦时 R/V 是全局动作（输入栏聚焦时它们是普通字符，不抢）
+            if !self.search_input_focus {
+                match k.code {
+                    KeyCode::Char('R') => {
+                        self.reprobe_with_toast();
+                        return;
+                    }
+                    KeyCode::Char('V') => {
+                        self.toggle_show_all_sources();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             // 列表聚焦时直接打字：回焦输入栏并插入，避免“打字丢字”
             if !self.search_input_focus {
                 if let Some(c) = search_keys::printable_to_input(&k) {
@@ -1082,6 +1240,12 @@ impl App {
                 self.search_input_focus = true;
             }
             KeyCode::Char('S') => self.cycle_source(),
+            KeyCode::Char('R') => self.reprobe_with_toast(),
+            KeyCode::Char('V') => {
+                if self.screen == ScreenKind::Search {
+                    self.toggle_show_all_sources();
+                }
+            }
             KeyCode::Char('g') => self.goto(ScreenKind::Downloads),
             KeyCode::Char('v') => {
                 if self.now_playing.is_some() {
@@ -1201,6 +1365,7 @@ impl App {
             "下载这首".to_string(),
             format!("音质    {}", self.cfg.quality),
             format!("播放顺序    {}", self.play_mode.label()),
+            format!("来源    {}", crate::source::source_display(&song.source)),
         ]
     }
 
@@ -1306,6 +1471,10 @@ impl App {
     }
 
     fn do_search(&mut self, q: String) {
+        if self.source_id == AGGREGATE_ID {
+            self.aggregate_search(q);
+            return;
+        }
         // 焦点保持原状：输入栏聚焦时继续可编辑，列表聚焦时保持列表操作
         self.search_loading = true;
         let kind = crate::source::SearchKind::from_index(self.search_type);
@@ -1320,24 +1489,27 @@ impl App {
 
     /// 当前源的「组 · 名称」+ 是否可用
     fn current_source(&self) -> (String, bool) {
+        if self.source_id == AGGREGATE_ID {
+            let n = self.ok_source_ids().len();
+            return (format!("聚合 · {n} 个可用源"), n > 0);
+        }
         match self.registry.get(&self.source_id) {
-            // 不在渲染/按键路径里探活（会卡 UI）；可用性只看最近一次搜索结果
-            Some(s) => (
-                format!("{} · {}", s.group(), s.name()),
-                !self.failed_sources.contains(&self.source_id),
-            ),
+            // 不在渲染/按键路径里探活（会卡 UI）；可用性只读缓存 + 最近一次搜索结果
+            Some(s) => {
+                let st = self.health.state(s.id());
+                let healthy = !matches!(st, SourceState::Down | SourceState::NeedsCreds);
+                (
+                    format!("{} · {}", s.group(), s.name()),
+                    healthy && !self.failed_sources.contains(&self.source_id),
+                )
+            }
             None => ("未知".to_string(), false),
         }
     }
 
     /// S 键：在已注册的源之间循环；换了源就按当前关键词重搜
     fn cycle_source(&mut self) {
-        let ids: Vec<String> = self
-            .registry
-            .all()
-            .iter()
-            .map(|s| s.id().to_string())
-            .collect();
+        let ids = self.source_cycle_ids();
         if ids.is_empty() {
             return;
         }
@@ -1363,6 +1535,213 @@ impl App {
         }
     }
 
+    /// S 循环用的源列表：聚合永远排第一，其余只放 `Ok` 的（V 键打开后连离线的也放）
+    fn source_cycle_ids(&self) -> Vec<String> {
+        let mut ids = vec![AGGREGATE_ID.to_string()];
+        for src in self.registry.all() {
+            let id = src.id();
+            let ok = self.health.state(id).is_ok();
+            if ok || self.show_all_sources || self.source_id == id {
+                ids.push(id.to_string());
+            }
+        }
+        ids
+    }
+
+    /// 当前可用的源（聚合只问这些）
+    fn ok_source_ids(&self) -> Vec<String> {
+        self.registry
+            .all()
+            .iter()
+            .filter(|s| self.health.state(s.id()).is_ok())
+            .map(|s| s.id().to_string())
+            .collect()
+    }
+
+    fn toggle_show_all_sources(&mut self) {
+        self.show_all_sources = !self.show_all_sources;
+        let n = self.registry.len();
+        let ok = self.ok_source_ids().len();
+        self.toast = Some((
+            if self.show_all_sources {
+                format!("源列表: 全部 {} 个（{} 可用，{} 离线）", n, ok, n - ok)
+            } else {
+                format!("源列表: 只用可用的 {} 个（V 看全部）", ok)
+            },
+            Instant::now(),
+        ));
+    }
+
+    /// 启动/`R` 重探：所有源并发探活，结果通过 `AppMsg::Probe` 回到主线程
+    fn start_probe(&mut self) {
+        if self.health.probing_count() > 0 {
+            return;
+        }
+        let srcs: Vec<(String, Arc<dyn crate::source::Source>)> = self
+            .registry
+            .all()
+            .iter()
+            .map(|s| (s.id().to_string(), s.clone()))
+            .collect();
+        if srcs.is_empty() {
+            return;
+        }
+        self.probe_gen += 1;
+        let gen = self.probe_gen;
+        self.probe_total = srcs.len();
+        self.probe_done = 0;
+        self.probe_started = Some(Instant::now());
+        for (id, _) in &srcs {
+            self.health.set(id, SourceState::Probing);
+        }
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            health::probe_all_with(srcs, health::CONCURRENCY, |id, st| {
+                let _ = tx.send(AppMsg::Probe { gen, id, state: st });
+            });
+            let _ = tx.send(AppMsg::ProbeDone { gen });
+        });
+    }
+
+    /// 探测超时收尾：还没回来的源先按离线算，迟到的结果会覆盖它
+    fn probe_timeout_check(&mut self) {
+        let Some(started) = self.probe_started else {
+            return;
+        };
+        if started.elapsed() < Duration::from_secs(8) {
+            return;
+        }
+        let ids: Vec<String> = self
+            .registry
+            .all()
+            .iter()
+            .map(|s| s.id().to_string())
+            .collect();
+        for id in ids {
+            if self.health.state(&id) == SourceState::Probing {
+                self.health.set(&id, SourceState::Down);
+            }
+        }
+        self.probe_done = self.probe_total;
+        self.probe_started = None;
+        self.toast = Some((
+            format!(
+                "源探测超时，已按离线处理（{} 个可用）",
+                self.ok_source_ids().len()
+            ),
+            Instant::now(),
+        ));
+    }
+
+    fn reprobe_with_toast(&mut self) {
+        let before = self.probe_gen;
+        self.start_probe();
+        self.toast = Some((
+            if self.probe_gen == before {
+                "正在探测中…".to_string()
+            } else {
+                format!("重新探测 {} 个源…", self.probe_total)
+            },
+            Instant::now(),
+        ));
+    }
+
+    fn probe_status(&self) -> Option<String> {
+        if self.probe_started.is_some() {
+            Some(format!("探测中 {}/{}", self.probe_done, self.probe_total))
+        } else if self.health.ok_count() > 0 {
+            Some(format!(
+                "源 {}/{}",
+                self.health.ok_count(),
+                self.registry.len()
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// 聚合搜索：并发问所有 Ok 的源，谁先回来先显示；每源 5s、并发 4
+    fn aggregate_search(&mut self, q: String) {
+        self.search_gen += 1;
+        let gen = self.search_gen;
+        self.search_loading = true;
+        self.search.clear();
+        self.agg_seen.clear();
+        self.agg_sources.clear();
+        self.agg_failed.clear();
+        self.search_sel = 0;
+        self.selected.clear();
+        if crate::source::SearchKind::from_index(self.search_type)
+            != crate::source::SearchKind::Song
+        {
+            self.search_loading = false;
+            self.toast = Some((
+                "聚合源只搜歌曲，切回其它源再搜歌手/歌单/专辑".to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+        let mut targets: Vec<(String, Arc<dyn crate::source::Source>)> = Vec::new();
+        for src in self.registry.all() {
+            // 只并「能播」的源：能搜不能播的仍可在单源里搜，但不进聚合
+            if self.health.state(src.id()).is_ok() && src.capabilities().can_stream {
+                targets.push((src.id().to_string(), src.clone()));
+            }
+        }
+        if targets.is_empty() {
+            // 探测还没完成/全离线：兜底只问网易云，至少给个结果
+            if let Some(src) = self.registry.get("netease") {
+                targets.push(("netease".to_string(), src));
+            }
+        }
+        let ids: Vec<String> = targets.iter().map(|(id, _)| id.clone()).collect();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let (ptx, prx) = std::sync::mpsc::channel::<(String, Result<SearchResult, String>)>();
+            let queue = Arc::new(std::sync::Mutex::new(targets));
+            let workers = health::CONCURRENCY.clamp(1, ids.len().max(1));
+            for _ in 0..workers {
+                let queue = queue.clone();
+                let ptx = ptx.clone();
+                let q = q.clone();
+                thread::spawn(move || loop {
+                    let item = { queue.lock().unwrap().pop() };
+                    let Some((id, src)) = item else { break };
+                    let r = src
+                        .search(&q, 20, crate::source::SearchKind::Song)
+                        .map_err(|e| e.to_string());
+                    if ptx.send((id, r)).is_err() {
+                        break;
+                    }
+                });
+            }
+            drop(ptx);
+            let deadline = Instant::now() + health::AGG_TIMEOUT;
+            let mut answered: Vec<String> = Vec::new();
+            while answered.len() < ids.len() {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                match prx.recv_timeout(left) {
+                    Ok((id, r)) => {
+                        answered.push(id.clone());
+                        if tx.send(AppMsg::AggPart { gen, id, result: r }).is_err() {
+                            return;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let failed: Vec<String> = ids
+                .iter()
+                .filter(|id| !answered.contains(id))
+                .map(|id| format!("{id}(超时)"))
+                .collect();
+            let _ = tx.send(AppMsg::AggDone { gen, failed });
+        });
+    }
+
     fn move_sel(&mut self, delta: i32) {
         let len = self.list_len();
         if len == 0 {
@@ -1381,6 +1760,135 @@ impl App {
             _ => return,
         };
         *sel = (*sel as i32 + delta).rem_euclid(len as i32) as usize;
+        if self.screen == ScreenKind::Search {
+            self.lazy_duration_of_selected();
+        }
+    }
+
+    /// 列表里的来源短名 + 能不能出流（聚合模式的「源」列用）
+    fn source_badge(&self, s: &Song) -> (String, bool) {
+        let can = self.can_stream_song(s);
+        if self.source_id == AGGREGATE_ID {
+            if let Some(list) = self.agg_sources.get(&health::dedup_key(s)) {
+                if !list.is_empty() {
+                    // 同一首被多个源命中时全列出来：「网易云+QQ(直连)」
+                    return (list.join("+"), can || list.len() > 1);
+                }
+            }
+        }
+        (crate::source::source_display(&s.source), can)
+    }
+
+    /// 这首歌的源能不能出流（查 capability，不发网络请求）
+    fn can_stream_song(&self, s: &Song) -> bool {
+        self.registry
+            .get(&s.source)
+            .map(|src| src.capabilities().can_stream)
+            .unwrap_or(false)
+    }
+
+    /// 播放地址拿不到：记下这首、跳过它、按播放顺序继续
+    fn skip_unplayable(&mut self) {
+        let Some(song) = self.now_playing.clone() else {
+            return;
+        };
+        let key = format!("{}|{}", song.source, song.s_id);
+        self.bad_songs.insert(key);
+        if self.skip_streak >= 5 {
+            self.skip_streak = 0;
+            self.toast = Some((
+                format!("连续 5 首无法播放（最后一首: {}），已停下", song.name),
+                Instant::now(),
+            ));
+            return;
+        }
+        self.skip_streak += 1;
+        let Some(idx) = self.queue_idx else { return };
+        let n = self.queue.len();
+        if n <= 1 {
+            self.toast = Some((
+                format!(
+                    "无法播放: {}（{}），队列里没有别的歌了",
+                    song.name, song.source
+                ),
+                Instant::now(),
+            ));
+            return;
+        }
+        let blocked: Vec<bool> = self
+            .queue
+            .iter()
+            .map(|s| {
+                let k = format!("{}|{}", s.source, s.s_id);
+                self.bad_songs.contains(&k) || !self.can_stream_song(s)
+            })
+            .collect();
+        self.rng = self
+            .rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let next_idx = playback::next_playable(n, idx, self.play_mode, &blocked, self.rng);
+        match next_idx {
+            Some(ni) => {
+                let next_name = self.queue[ni].name.clone();
+                self.toast = Some((
+                    format!(
+                        "跳过无法播放: {}（{}）→ 接着放 {}",
+                        song.name, song.source, next_name
+                    ),
+                    Instant::now(),
+                ));
+                self.queue_idx = Some(ni);
+                self.play_gen += 1;
+                self.play_current(true);
+            }
+            None => {
+                self.toast = Some((
+                    format!(
+                        "无法播放: {}（{}），队列里没有其它可播的曲目",
+                        song.name, song.source
+                    ),
+                    Instant::now(),
+                ));
+                self.skip_streak = 0;
+            }
+        }
+    }
+
+    /// 选中行（或正在播放那首）缺时长且源支持懒补时，问一次；只问一次
+    fn lazy_duration_of_selected(&mut self) {
+        let song = match self.screen {
+            ScreenKind::Search => self.search.get(self.search_sel).cloned(),
+            _ => self.now_playing.clone(),
+        };
+        let Some(song) = song else { return };
+        self.lazy_duration_for(&song);
+    }
+
+    fn lazy_duration_for(&mut self, song: &Song) {
+        if song.dt > 0 || !song.source.starts_with("meting:") {
+            return;
+        }
+        let key = format!("{}|{}", song.source, song.s_id);
+        if !self.duration_asked.insert(key) {
+            return;
+        }
+        let registry = self.registry.clone();
+        let tx = self.tx.clone();
+        let source = song.source.clone();
+        let s_id = song.s_id.clone();
+        spawn(tx, move || {
+            let dt = registry
+                .duration_ms(&source, &crate::source::TrackId(s_id.clone()))
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+            AppMsg::Duration {
+                source: source.clone(),
+                s_id,
+                dt,
+            }
+        });
     }
 
     fn enter(&mut self) {
@@ -1558,9 +2066,30 @@ impl App {
         }
     }
 
-    fn play_list(&mut self, list: Vec<Song>, idx: usize) {
+    fn play_list(&mut self, list: Vec<Song>, mut idx: usize) {
         if list.is_empty() {
             return;
+        }
+        let mut list = list;
+        // 聚合列表里「仅搜索」的源不进播放队列，避免自动连播撞到取不到流的歌
+        if self.source_id == AGGREGATE_ID {
+            let cur = list.get(idx).cloned();
+            list.retain(|s| self.can_stream_song(s));
+            if list.is_empty() {
+                self.toast = Some((
+                    "这首来自「仅搜索」的源，取不到播放地址".to_string(),
+                    Instant::now(),
+                ));
+                return;
+            }
+            if let Some(c) = cur {
+                idx = list
+                    .iter()
+                    .position(|s| s.source == c.source && s.s_id == c.s_id)
+                    .unwrap_or(0);
+            } else {
+                idx = 0;
+            }
         }
         self.queue = list;
         self.queue_idx = Some(idx);
@@ -1583,6 +2112,7 @@ impl App {
         let tx = self.tx.clone();
         let quality = self.cfg.quality.clone();
         let id = song.id;
+        self.lazy_duration_for(&song);
         // 按歌曲自带的 source 去找对应的源取流（混源队列靠这一步）
         let registry = self.registry.clone();
         let source = if song.source.is_empty() {

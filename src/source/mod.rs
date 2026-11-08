@@ -7,6 +7,7 @@
 pub mod audius;
 pub mod bilibili;
 pub mod ccmixter;
+pub mod health;
 pub mod http;
 pub mod jamendo;
 pub mod meting;
@@ -77,6 +78,9 @@ pub struct Capabilities {
     pub lyrics: bool,
     /// 空 = 该源不区分音质
     pub qualities: Vec<&'static str>,
+    /// 能不能出流。聚合只把 `true` 的源并进播放队列；
+    /// 「能搜不能播」的源（例如没配 cookie 的 Meting）列表可见但标「仅搜索」。
+    pub can_stream: bool,
 }
 
 impl Capabilities {
@@ -108,6 +112,32 @@ pub trait Source: Send + Sync {
     fn lyric(&self, id: &TrackId) -> Result<Lyrics>;
     /// 取播放地址；拿不到（无版权/需会员/流过期）时返回 Ok(None)
     fn stream_url(&self, id: &TrackId, quality: &str) -> Result<Option<String>>;
+    /// 懒补时长：搜索接口不带时长的源（Meting）在选中/播放时问一次，默认不支持
+    fn duration_ms(&self, _id: &TrackId) -> Result<Option<i64>> {
+        Ok(None)
+    }
+}
+
+/// 内部源 id → 给人看的名字。列表/正在播放/i 弹窗都走它，未知 id 原样返回。
+pub fn source_display(id: &str) -> String {
+    match id {
+        "netease" => "网易云".to_string(),
+        "qq" => "QQ(直连)".to_string(),
+        "meting:tencent" => "QQ(Meting)".to_string(),
+        "meting:kugou" => "酷狗".to_string(),
+        "meting:baidu" => "千度".to_string(),
+        "meting:kuwo" => "酷我".to_string(),
+        "youtube" => "YouTube".to_string(),
+        "soundcloud" => "SoundCloud".to_string(),
+        "bilibili" => "bilibili".to_string(),
+        "migu" => "咪咕".to_string(),
+        "audius" => "Audius".to_string(),
+        "ccmixter" => "ccMixter".to_string(),
+        "wikimedia" => "Wikimedia".to_string(),
+        "jamendo" => "Jamendo".to_string(),
+        "opengameart" => "OpenGameArt".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// 从 `Song` 得到跨源 ID：优先用 `s_id`，老数据没有就退回数字 id。
@@ -216,6 +246,14 @@ impl SourceRegistry {
         self.sources.len()
     }
 
+    /// 按 source 标识补时长（拿不到就 None，不报错）
+    pub fn duration_ms(&self, source: &str, id: &TrackId) -> Result<Option<i64>> {
+        match self.get(source) {
+            Some(s) => s.duration_ms(id),
+            None => Ok(None),
+        }
+    }
+
     /// 按 source 标识取流；未知源给明确错误，别让上层拿到 None 猜
     pub fn stream_url(&self, source: &str, id: &TrackId, quality: &str) -> Result<Option<String>> {
         match self.get(source) {
@@ -305,6 +343,32 @@ mod tests {
         assert_eq!(track_of(&song).as_str(), "42");
         song.s_id = "dQw4w9WgXcQ".to_string();
         assert_eq!(track_of(&song).as_str(), "dQw4w9WgXcQ");
+    }
+
+    #[test]
+    fn source_display_covers_every_registered_source() {
+        let cases = [
+            ("netease", "网易云"),
+            ("qq", "QQ(直连)"),
+            ("meting:tencent", "QQ(Meting)"),
+            ("meting:kugou", "酷狗"),
+            ("meting:baidu", "千度"),
+            ("meting:kuwo", "酷我"),
+            ("youtube", "YouTube"),
+            ("soundcloud", "SoundCloud"),
+            ("bilibili", "bilibili"),
+            ("migu", "咪咕"),
+            ("audius", "Audius"),
+            ("ccmixter", "ccMixter"),
+            ("wikimedia", "Wikimedia"),
+            ("jamendo", "Jamendo"),
+            ("opengameart", "OpenGameArt"),
+        ];
+        for (id, want) in cases {
+            assert_eq!(source_display(id), want, "id={id}");
+        }
+        assert_eq!(source_display("some-new-source"), "some-new-source");
+        assert_eq!(source_display(""), "");
     }
 
     #[test]

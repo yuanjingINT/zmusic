@@ -119,6 +119,7 @@ impl Source for WikimediaSource {
             kinds: vec![SearchKind::Song],
             lyrics: false,
             qualities: Vec::new(),
+            can_stream: true,
         }
     }
 

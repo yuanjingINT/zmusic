@@ -90,6 +90,7 @@ impl Source for AudiusSource {
             kinds: vec![SearchKind::Song],
             lyrics: false,
             qualities: Vec::new(),
+            can_stream: true,
         }
     }
 

@@ -192,6 +192,10 @@ fn render_top(f: &mut Frame, area: Rect, app: &mut App) {
     let mut spans = Vec::with_capacity(4);
     spans.push(Span::styled(" zmusic · ", theme::title()));
     spans.push(Span::styled(app.screen.name(), theme::title()));
+    if let Some(st) = app.probe_status() {
+        spans.push(Span::styled("   ", theme::dim()));
+        spans.push(Span::styled(st, theme::dim()));
+    }
     if let Some((msg, _)) = &app.toast {
         spans.push(Span::styled("   ", theme::warn()));
         spans.push(Span::styled(msg.as_str(), theme::warn()));
@@ -376,6 +380,7 @@ fn render_songs(f: &mut Frame, area: Rect, app: &mut App) {
         render_center(f, area, "暂无推荐歌曲");
         return;
     }
+    let tag = |s: &crate::models::Song| app.source_badge(s);
     render_song_table(
         f,
         area,
@@ -383,6 +388,7 @@ fn render_songs(f: &mut Frame, area: Rect, app: &mut App) {
         app.songs_sel,
         &app.selected,
         "歌曲推荐",
+        Some(&tag),
     );
 }
 
@@ -500,6 +506,19 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
             })
             .collect::<Vec<_>>(),
     );
+    if app.source_id == crate::ui::AGGREGATE_ID && !app.agg_failed.is_empty() {
+        let mut names = String::new();
+        for (i, f) in app.agg_failed.iter().take(4).enumerate() {
+            if i > 0 {
+                names.push('，');
+            }
+            names.push_str(f.as_str());
+        }
+        if app.agg_failed.len() > 4 {
+            names.push('…');
+        }
+        spans.push(Span::styled(format!("   失败源: {names}"), theme::warn()));
+    }
     spans.push(Span::styled(
         if app.search_input_focus {
             "   Tab→列表 · F1-F4/Alt+数字 换类型"
@@ -523,6 +542,7 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
                 );
                 return;
             }
+            let tag = |s: &crate::models::Song| app.source_badge(s);
             render_song_table(
                 f,
                 list_area,
@@ -530,6 +550,7 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
                 app.search_sel,
                 &app.selected,
                 "搜索结果",
+                Some(&tag),
             );
         }
         1 => {
@@ -680,6 +701,7 @@ fn render_library(f: &mut Frame, area: Rect, app: &mut App) {
         render_center(f, area, "暂无内容");
         return;
     }
+    let tag = |s: &crate::models::Song| app.source_badge(s);
     render_song_table(
         f,
         area,
@@ -687,6 +709,7 @@ fn render_library(f: &mut Frame, area: Rect, app: &mut App) {
         app.lib_sel,
         &app.selected,
         &app.lib_title,
+        Some(&tag),
     );
 }
 
@@ -717,6 +740,7 @@ fn render_favorites(f: &mut Frame, area: Rect, app: &mut App) {
         );
         return;
     }
+    let tag = |s: &crate::models::Song| app.source_badge(s);
     render_song_table(
         f,
         area,
@@ -724,8 +748,12 @@ fn render_favorites(f: &mut Frame, area: Rect, app: &mut App) {
         app.fav_sel,
         &app.selected,
         &title,
+        Some(&tag),
     );
 }
+
+/// 聚合列表的「源」列：短名 + 能不能出流
+type SourceTag<'a> = &'a dyn Fn(&crate::models::Song) -> (String, bool);
 
 fn render_song_table(
     f: &mut Frame,
@@ -734,6 +762,8 @@ fn render_song_table(
     sel: usize,
     selected: &std::collections::HashSet<i64>,
     title: &str,
+    // 每行标来源；`false` 的那行是「仅搜索」（不能出流），红色提示
+    tag: Option<SourceTag<'_>>,
 ) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -751,26 +781,58 @@ fn render_song_table(
             } else {
                 Span::styled("  ", theme::dim())
             };
-            Row::new(vec![
+            let mut cells = vec![
                 Cell::from(mark),
                 Cell::from(Span::styled(format!("{:>3}", top + i + 1), theme::dim())),
                 Cell::from(s.name.as_str()),
                 Cell::from(util::artists_of(&s.ar)),
-                Cell::from(s.al.name.as_str()),
-                Cell::from(util::fmt_time(Some(s.dt as f64 / 1000.0))),
-            ])
+            ];
+            if let Some(f) = tag {
+                let (name, can_stream) = f(s);
+                cells.push(Cell::from(Span::styled(
+                    if can_stream {
+                        name
+                    } else {
+                        format!("{name} 仅搜索")
+                    },
+                    if can_stream {
+                        theme::dim()
+                    } else {
+                        theme::warn()
+                    },
+                )));
+            }
+            cells.push(Cell::from(s.al.name.as_str()));
+            cells.push(Cell::from(util::fmt_time(Some(s.dt as f64 / 1000.0))));
+            Row::new(cells)
         })
         .collect();
-    let header =
-        Row::new(["选", "#", "歌名", "歌手", "专辑", "时长"].map(Cell::from)).style(theme::title());
-    let widths = [
-        Constraint::Length(3),
-        Constraint::Length(4),
-        Constraint::Min(14),
-        Constraint::Min(10),
-        Constraint::Min(10),
-        Constraint::Length(6),
-    ];
+    let headers: Vec<&str> = if tag.is_some() {
+        vec!["选", "#", "歌名", "歌手", "源", "专辑", "时长"]
+    } else {
+        vec!["选", "#", "歌名", "歌手", "专辑", "时长"]
+    };
+    let header = Row::new(headers.into_iter().map(Cell::from)).style(theme::title());
+    let widths: Vec<Constraint> = if tag.is_some() {
+        vec![
+            Constraint::Length(3),
+            Constraint::Length(4),
+            Constraint::Min(12),
+            Constraint::Min(8),
+            Constraint::Length(18),
+            Constraint::Min(8),
+            Constraint::Length(6),
+        ]
+    } else {
+        vec![
+            Constraint::Length(3),
+            Constraint::Length(4),
+            Constraint::Min(14),
+            Constraint::Min(10),
+            Constraint::Min(10),
+            Constraint::Length(6),
+        ]
+    };
     let mut ts = TableState::default();
     ts.select(Some(sel.saturating_sub(top)));
     let table = Table::new(rows, widths)
@@ -789,7 +851,12 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
     let [info, lyric_area] =
         Layout::vertical([Constraint::Length(4), Constraint::Min(0)]).areas(area);
     let title = format!("  {} ", song.name);
-    let sub = format!("  {} · {} ", util::artists_of(&song.ar), song.al.name);
+    let sub = format!(
+        "  {} · {} · {} ",
+        util::artists_of(&song.ar),
+        song.al.name,
+        crate::source::source_display(&song.source)
+    );
     let ratio = match (st.time_pos, st.duration) {
         (Some(t), Some(d)) if d > 0.0 => (t / d).clamp(0.0, 1.0),
         _ => 0.0,

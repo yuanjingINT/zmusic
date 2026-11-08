@@ -116,6 +116,7 @@ impl Source for CcMixterSource {
             kinds: vec![SearchKind::Song],
             lyrics: false,
             qualities: Vec::new(),
+            can_stream: true,
         }
     }
 

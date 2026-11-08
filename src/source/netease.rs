@@ -228,6 +228,7 @@ impl crate::source::Source for NetEaseSource {
             ],
             lyrics: true,
             qualities: vec!["standard", "higher", "exhigh", "lossless", "hires"],
+            can_stream: true,
         }
     }
 

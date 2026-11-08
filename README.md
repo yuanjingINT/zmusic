@@ -122,6 +122,7 @@ sudo apt install build-essential pkg-config libssl-dev
 | `NCM_QUALITY` | `exhigh` | 音质：`standard` / `higher` / `exhigh` / `lossless` / `hires` |
 | `ZMUSIC_PROXY` | 空 | 可选代理，如 `socks5h://127.0.0.1:11080`；YouTube / SoundCloud 必需，见下 |
 | `ZMUSIC_METING_URL` | `http://127.0.0.1:8123` | Meting 侧车地址（腾讯/酷狗/百度/酷我） |
+| `ZMUSIC_METING_COOKIE` | 空 | 可选。Meting 换流用的平台 cookie，只从环境变量读，不落盘、不进日志 |
 
 运行时会写：
 
@@ -162,6 +163,27 @@ UI 据此禁用不支持的项，不靠猜。
 | 汽水音乐（抖音） | `api.qishui.com/luna/pc/search/track` 回 200 但 0 字节，要 `a_bogus`/`X-Bogus` 签名；网页端是 SPA 壳，不走逆签名就不碰 |
 | Free Music Archive | 老 API 404，新接口要 key |
 | Spotify / Tidal / Qobuz / Apple Music | 官方 API 只给元数据与 30s 试听，`stream_url` 只能返回 `None`，等有账号 token 再谈 |
+
+### 源探测与聚合
+
+启动时 zmusic 会在后台并发探测所有源（并发 4、每源一次最小请求），**不进渲染/按键路径**，
+所以界面不会等探测。顶栏会显示 `探测中 3/15`，探测完变成 `源 9/15`。
+
+- `R` 键手动重探（同样在后台，界面不卡）
+- `V` 键切换「只列可用源 / 列全部源（离线的置灰）」；`S` 只在可用源之间循环
+- 探测结果缓存 10 分钟；缺 key（如 Jamendo）和侧车没起标「需凭据」，网络挂了标「离线」，两者不混
+
+**能搜 ≠ 能播**：`Capabilities::can_stream` 标明一个源能不能出流。聚合只把 `can_stream=true`
+的源并进来；没配 cookie 的 Meting、上游只回空壳的源在列表里标「仅搜索」（红色），不塞进播放队列。
+单源搜索时这类结果照样能看，点播放会提示「这首来自『仅搜索』的源」。
+
+取不到播放地址时（会员曲、直链过期、源失效）不会停在「标题变了没声音」：后台记下这首、
+按播放顺序跳到下一首能播的，顶栏给出 `跳过无法播放: X（源）→ 接着放 Y`；
+连续跳 5 首还没播上就停下并提示。随机模式下不会反复撞同一首。
+
+搜索页最前面是 **聚合** 伪源：把关键词并发发给所有可用源（并发 4、每源 5s），
+谁先回来先显示，按「歌名 + 主歌手」去重保留先到的；超时的源会写在状态行 `失败源: …`，
+不影响其它源的结果。聚合只做歌曲搜索，播放仍按每条结果的 `Song.source` 派发。
 
 ### yt-dlp 源（YouTube / SoundCloud）与代理
 
@@ -204,6 +226,35 @@ Rust 侧注册成四个源：`QQ 音乐 (Meting)` / `酷狗 (Meting)` / `千千/
 `ZMUSIC_METING_URL` 可改地址（默认 `http://127.0.0.1:8123`）。侧车没起或装不上，这组源整体置灰，
 不影响网易云和其它源。QQ 另有直连源（标 `QQ 音乐 (直连)`）作回退。
 
+装了包之后侧车是 `disabled` 的，要开机自启：
+
+```bash
+systemctl --user enable --now meting-sidecar.service
+```
+
+#### 可选：cookie（会员/受限曲目换流用）
+
+tencent/kugou 的搜索不需要登录，但取流对很多曲目要平台 cookie。zmusic 只接受从**环境变量**
+读到的 cookie（`ZMUSIC_METING_COOKIE`，或侧车自己的 `METING_COOKIE`），不会写盘、不会进日志：
+
+```bash
+# 临时用（当前 shell）
+export ZMUSIC_METING_COOKIE='uin=o0123456; qm_keyst=...'
+# 常驻：写进 600 的环境文件，由 systemd 读（unit 里已配 EnvironmentFile）
+mkdir -p ~/.config/zmusic && install -m 600 /dev/null ~/.config/zmusic/meting.env
+printf 'METING_COOKIE=%s\n' 'uin=...; qm_keyst=...' > ~/.config/zmusic/meting.env
+systemctl --user restart meting-sidecar
+```
+
+cookie 从浏览器开发者工具里复制（目标站点已登录状态下，任意请求的 `Cookie` 请求头）。
+**用自己账号的 cookie，风险自担**：它等价于该账号的登录态，别外借、别提交进仓库。
+
+#### 时长
+
+Meting 的搜索接口不给时长，列表里先显示 `--:--`；选中或播放时补问一次（`type=duration`），
+补到了就刷新。腾讯能补（实测 `晴天` → 269s），酷狗的 `playInfo` 对未授权 hash 恒返回
+`timeLength=0`，这类就一直是 `--:--`。
+
 ## 快捷键
 
 | 键 | 作用 |
@@ -211,7 +262,9 @@ Rust 侧注册成四个源：`QQ 音乐 (Meting)` / `酷狗 (Meting)` / `千千/
 | `h` | 回主菜单 |
 | `s` | 搜索 |
 | `Tab` | 搜索页：输入栏 ↔ 结果列表 切换焦点 |
-| `S` | 搜索页：切换音乐源（按「国内 / 国际 / 公开免费」分组循环） |
+| `S` | 搜索页：在**可用**源之间循环（第一个是「聚合」；`V` 打开全部） |
+| `R` | 重新探测所有源（后台，不卡界面） |
+| `V` | 搜索页：源列表 只列可用 / 列全部 切换 |
 | `F1`–`F4` / `Alt+0`–`3` | 搜索页：切搜索类型（歌曲 / 歌手 / 歌单 / 专辑），两种焦点下都可用 |
 | `g` | 下载列表 |
 | `v` | 正在播放界面 |

@@ -112,6 +112,7 @@ impl Source for QqSource {
             kinds: vec![SearchKind::Song],
             lyrics: false,
             qualities: Vec::new(),
+            can_stream: true,
         }
     }
 

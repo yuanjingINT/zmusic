@@ -188,6 +188,7 @@ impl Source for BilibiliSource {
             kinds: vec![SearchKind::Song],
             lyrics: false,
             qualities: Vec::new(),
+            can_stream: true,
         }
     }
 
