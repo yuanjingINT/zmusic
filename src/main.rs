@@ -41,6 +41,9 @@ fn main() -> anyhow::Result<()> {
         None => {}
     }
 
+    // mpv 先起：socket 就绪要 ~120ms，这段和下面的配置/注册表初始化并行，
+    // 首帧只等剩下的那点时间（旧实现先初始化、再同步等 mpv，白等一整个量化周期）。
+    let starting = player::Player::spawn()?;
     let cfg = config::Config::load();
     let api = source::netease::NetEaseSource::new(cfg.api_base.clone());
     let registry = std::sync::Arc::new(source::SourceRegistry::with_defaults(
@@ -57,7 +60,7 @@ fn main() -> anyhow::Result<()> {
         quality.clone(),
         cfg.api_base.clone(),
     );
-    let player = player::Player::start()?;
+    let player = starting.finish(std::time::Duration::from_secs(3))?;
 
     enable_raw_mode()?;
     let mut stdout = stdout();

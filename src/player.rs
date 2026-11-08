@@ -52,8 +52,60 @@ enum Poll {
     Volume,
 }
 
+/// mpv 进程已经 spawn、但 IPC 还没就绪的中间态。
+///
+/// 启动路径上 mpv 的 socket 就绪要 ~120ms，这段时间不该白等：
+/// `Player::spawn()` 立刻返回，调用方继续做配置/源注册表等初始化，
+/// 最后 `finish()` 再等 IPC 连上，两边并行。
+pub struct StartingPlayer {
+    child: Child,
+    socket: String,
+}
+
+impl StartingPlayer {
+    /// 等 mpv 的 IPC socket 可连，最多等 `timeout`。
+    ///
+    /// 5ms 轮询：旧实现是 connect 失败就 sleep(100ms)，
+    /// 实测把 120ms 的就绪时间量化成 200ms+，白等约 80ms。
+    pub fn finish(mut self, timeout: Duration) -> Result<Player> {
+        let deadline = Instant::now() + timeout;
+        let stream = loop {
+            match UnixStream::connect(&self.socket) {
+                Ok(s) => break s,
+                Err(_) => {
+                    if let Ok(Some(status)) = self.child.try_wait() {
+                        return Err(anyhow!("mpv 启动后立即退出 ({status})"));
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(anyhow!(
+                            "mpv IPC 连接超时 ({}ms, socket: {})",
+                            timeout.as_millis(),
+                            self.socket
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        };
+        let (tx, rx) = channel();
+        let state = Arc::new(Mutex::new(MpvState {
+            volume: 70,
+            ..Default::default()
+        }));
+        let st = state.clone();
+        std::thread::spawn(move || ipc_loop(stream, rx, st));
+        Ok(Player {
+            state,
+            tx,
+            child: Some(self.child),
+            socket: self.socket,
+        })
+    }
+}
+
 impl Player {
-    pub fn start() -> Result<Self> {
+    /// 只起 mpv，不等 IPC；配合 `StartingPlayer::finish` 把启动时间叠起来用。
+    pub fn spawn() -> Result<StartingPlayer> {
         let socket = util::mpv_socket();
         let _ = std::fs::remove_file(&socket);
         let out = std::fs::File::create("/tmp/ncm_mpv.log")
@@ -81,30 +133,7 @@ impl Player {
             ))
             .spawn()
             .map_err(|e| anyhow!("无法启动 mpv: {}", e))?;
-        let mut stream = None;
-        for _ in 0..60 {
-            match UnixStream::connect(&socket) {
-                Ok(s) => {
-                    stream = Some(s);
-                    break;
-                }
-                Err(_) => std::thread::sleep(Duration::from_millis(100)),
-            }
-        }
-        let stream = stream.ok_or_else(|| anyhow!("mpv IPC 连接失败 (socket: {})", socket))?;
-        let (tx, rx) = channel();
-        let state = Arc::new(Mutex::new(MpvState {
-            volume: 70,
-            ..Default::default()
-        }));
-        let st = state.clone();
-        std::thread::spawn(move || ipc_loop(stream, rx, st));
-        Ok(Player {
-            state,
-            tx,
-            child: Some(child),
-            socket,
-        })
+        Ok(StartingPlayer { child, socket })
     }
 
     pub fn load(&self, url: &str) {
