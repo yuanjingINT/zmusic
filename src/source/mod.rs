@@ -10,6 +10,7 @@ pub mod http;
 pub mod jamendo;
 pub mod netease;
 pub mod opengameart;
+pub mod qq;
 pub mod wikimedia;
 pub mod youtube;
 
@@ -134,6 +135,7 @@ impl SourceRegistry {
         reg.register(Arc::new(wikimedia::WikimediaSource::new()));
         reg.register(Arc::new(jamendo::JamendoSource::new()));
         reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
+        reg.register(Arc::new(qq::QqSource::new()));
         let yt = match proxy {
             Some(p) => youtube::YouTubeSource::with_proxy("yt-dlp", Some(p)),
             None => youtube::YouTubeSource::new(),
