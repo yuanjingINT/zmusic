@@ -7,7 +7,7 @@ use super::ScreenKind;
 /// 按页面 + 搜索页焦点状态返回提示文本（不含"已选 N 首"这类动态内容）。
 pub fn hints(screen: ScreenKind, search_input_focus: bool) -> &'static str {
     match screen {
-        ScreenKind::Menu => "j/k 选择  Enter 进入  s 搜索  g 下载  q 退出",
+        ScreenKind::Menu => "0-6 直达  j/k 选择  Enter 进入  s 搜索  g 下载  q 退出",
         ScreenKind::Search => {
             if search_input_focus {
                 "输入关键词  Enter 搜索  Tab 到列表  F1-F4 换类型  Esc 返回"

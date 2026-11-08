@@ -113,7 +113,17 @@ sudo apt install build-essential pkg-config libssl-dev
 
 ## 配置
 
-全部通过环境变量，都有默认值：
+所有服务/账号配置收在一个文件：`~/.config/zmusic/config.toml`。生成/编辑：
+
+```bash
+zmusic config          # 不存在就生成模板并打开编辑器
+zmusic config --print  # 只打印路径
+```
+
+完整步骤（ncm-api、Meting 侧车与 cookie、YouTube 代理、Jamendo key、每个源需要什么）
+见 [docs/CONFIG.md](docs/CONFIG.md)。
+
+环境变量仍然生效，优先级 **环境变量 > config.toml > 默认值**：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -122,7 +132,8 @@ sudo apt install build-essential pkg-config libssl-dev
 | `NCM_QUALITY` | `exhigh` | 音质：`standard` / `higher` / `exhigh` / `lossless` / `hires` |
 | `ZMUSIC_PROXY` | 空 | 可选代理，如 `socks5h://127.0.0.1:11080`；YouTube / SoundCloud 必需，见下 |
 | `ZMUSIC_METING_URL` | `http://127.0.0.1:8123` | Meting 侧车地址（腾讯/酷狗/百度/酷我） |
-| `ZMUSIC_METING_COOKIE` | 空 | 可选。Meting 换流用的平台 cookie，只从环境变量读，不落盘、不进日志 |
+| `ZMUSIC_METING_COOKIE` | 空 | 可选。Meting 换流用的平台 cookie（建议写 config.toml `[meting] cookie`），不落盘、不进日志 |
+| `ZMUSIC_YTDLP_BIN` | `yt-dlp` | yt-dlp 可执行文件名或绝对路径 |
 
 运行时会写：
 
@@ -272,6 +283,7 @@ Meting 的搜索接口不给时长，列表里先显示 `--:--`；选中或播�
 
 | 键 | 作用 |
 |----|------|
+| `0`–`6` | 主菜单直达对应项（菜单编号从 0 开始） |
 | `h` | 回主菜单 |
 | `s` | 搜索 |
 | `Tab` | 搜索页：输入栏 ↔ 结果列表 切换焦点 |

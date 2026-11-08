@@ -33,6 +33,7 @@ package() {
   install -Dm755 target/release/zmusic "$pkgdir/usr/bin/zmusic"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 docs/CONFIG.md "$pkgdir/usr/share/doc/$pkgname/CONFIG.md"
 
   # Meting 侧车：node_modules 是在仓库里有意 vendored 的（@meting/core，MIT），
   # 为了 makepkg 离线构建；不带它 meting:* 那组源装完就是「侧车未启动」。

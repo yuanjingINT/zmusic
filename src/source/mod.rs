@@ -212,34 +212,45 @@ impl SourceRegistry {
         ok
     }
 
-    /// 默认注册网易云 + YouTube（后者依赖 yt-dlp，缺了就自己标不可用）
-    pub fn with_defaults(netease_base: String, proxy: Option<String>, meting_base: String) -> Self {
+    /// 默认注册全部源；配置（config.toml / 环境变量）由调用方传进来
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_defaults(
+        netease_base: String,
+        proxy: Option<String>,
+        meting_base: String,
+        ytdlp_bin: String,
+        meting_cookie: Option<String>,
+        jamendo_client_id: Option<String>,
+    ) -> Self {
         let mut reg = SourceRegistry::new();
         // 注册顺序 = `S` 循环顺序 = 去重代表源的优先级：网易云钉死第一，
         // 然后国内（QQ 直连 → Meting 系 → 咪咕 → bilibili）→ 国际 → 公开免费
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
         reg.register(Arc::new(qq::QqSource::new()));
         for server in ["tencent", "kugou", "baidu", "kuwo"] {
-            reg.register(Arc::new(meting::MetingSource::new(
+            reg.register(Arc::new(meting::MetingSource::with_cookie(
                 meting_base.clone(),
                 server,
+                meting_cookie.clone(),
             )));
         }
         reg.register(Arc::new(migu::MiguSource::new()));
-        reg.register(Arc::new(bilibili::BilibiliSource::new()));
+        reg.register(Arc::new(bilibili::BilibiliSource::with_exe(&ytdlp_bin)));
         // 国际
         // 走 yt-dlp 的一组站点（同一套逻辑按 Site 参数化）
         for site in [ytdlp::Site::YouTube, ytdlp::Site::SoundCloud] {
             let src = match &proxy {
-                Some(p) => ytdlp::YtDlpSource::with_proxy(site, "yt-dlp", Some(p.clone())),
-                None => ytdlp::YtDlpSource::new(site),
+                Some(p) => ytdlp::YtDlpSource::with_proxy(site, &ytdlp_bin, Some(p.clone())),
+                None => ytdlp::YtDlpSource::with_proxy(site, &ytdlp_bin, None),
             };
             reg.register(Arc::new(src));
         }
         // 公开免费
         reg.register(Arc::new(audius::AudiusSource::new()));
         reg.register(Arc::new(ccmixter::CcMixterSource::new()));
-        reg.register(Arc::new(jamendo::JamendoSource::new()));
+        reg.register(Arc::new(jamendo::JamendoSource::with_client_id(
+            jamendo_client_id,
+        )));
         reg.register(Arc::new(wikimedia::WikimediaSource::new()));
         reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
         reg
@@ -305,6 +316,9 @@ mod tests {
             "http://127.0.0.1:3000".to_string(),
             None,
             "http://127.0.0.1:8123".to_string(),
+            "yt-dlp".to_string(),
+            None,
+            None,
         );
         assert!(reg.len() >= 2);
         let s = reg.get("netease").expect("默认应注册网易云");
@@ -324,6 +338,9 @@ mod tests {
             "http://127.0.0.1:3000".to_string(),
             None,
             "http://127.0.0.1:8123".to_string(),
+            "yt-dlp".to_string(),
+            None,
+            None,
         );
         reg.register(Arc::new(netease::NetEaseSource::new(
             "http://127.0.0.1:3000".to_string(),
@@ -337,6 +354,9 @@ mod tests {
             "http://127.0.0.1:3000".to_string(),
             None,
             "http://127.0.0.1:8123".to_string(),
+            "yt-dlp".to_string(),
+            None,
+            None,
         );
         let err = reg
             .stream_url("spotify", &TrackId::from("dQw4w9WgXcQ"), "exhigh")
@@ -382,6 +402,9 @@ mod tests {
             "http://127.0.0.1:3000".to_string(),
             None,
             "http://127.0.0.1:8123".to_string(),
+            "yt-dlp".to_string(),
+            None,
+            None,
         );
         let ids: Vec<&str> = reg.all().iter().map(|s| s.id()).collect();
         assert_eq!(ids[0], "netease", "S 循环第一个必须是网易云");

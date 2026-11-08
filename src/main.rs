@@ -21,12 +21,35 @@ use ratatui::Terminal;
 use std::io::stdout;
 
 fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(|s| s.as_str()) {
+        // 配置子命令：生成/打开 config.toml，不启动 TUI
+        Some("config") => return config_cli(&args[1..]),
+        Some("-h") | Some("--help") => {
+            print_help();
+            return Ok(());
+        }
+        Some("-V") | Some("--version") => {
+            println!("zmusic {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some(other) => {
+            eprintln!("未知参数: {other}");
+            print_help();
+            std::process::exit(2);
+        }
+        None => {}
+    }
+
     let cfg = config::Config::load();
     let api = source::netease::NetEaseSource::new(cfg.api_base.clone());
     let registry = std::sync::Arc::new(source::SourceRegistry::with_defaults(
         cfg.api_base.clone(),
         cfg.proxy.clone(),
-        cfg.meting_base.clone(),
+        cfg.meting_url.clone(),
+        cfg.ytdlp_binary.clone(),
+        cfg.meting_cookie.clone(),
+        cfg.jamendo_client_id.clone(),
     ));
     let quality = std::sync::Arc::new(std::sync::RwLock::new(cfg.quality.clone()));
     let downloader = downloader::Downloader::new(
@@ -53,4 +76,39 @@ fn main() -> anyhow::Result<()> {
     disable_raw_mode()?;
 
     res
+}
+
+fn print_help() {
+    println!(
+        "zmusic - 网易云/多源 终端音乐播放器\n\
+         \n\
+         用法:\n\
+         \x20 zmusic            启动播放器\n\
+         \x20 zmusic config     生成（如缺）并打开 ~/.config/zmusic/config.toml\n\
+         \x20 zmusic config --print  只打印配置文件路径\n\
+         \x20 zmusic --help / -V\n\
+         \n\
+         配置说明见 docs/CONFIG.md"
+    );
+}
+
+/// `zmusic config [--print]`：确保配置文件存在，默认用 $EDITOR/$VISUAL/vi 打开
+fn config_cli(rest: &[String]) -> anyhow::Result<()> {
+    let cfg = config::Config::load();
+    let path = cfg.ensure_config_file()?;
+    if rest.iter().any(|a| a == "--print") {
+        println!("{}", path.display());
+        return Ok(());
+    }
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let status = std::process::Command::new(&editor)
+        .arg(&path)
+        .status()
+        .map_err(|e| anyhow::anyhow!("启动编辑器 {} 失败: {e}", editor))?;
+    if !status.success() {
+        anyhow::bail!("{} 退出码 {:?}", editor, status.code());
+    }
+    Ok(())
 }

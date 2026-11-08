@@ -1,46 +1,309 @@
-use std::path::PathBuf;
+//! 统一配置：`~/.config/zmusic/config.toml`，环境变量仍可覆盖（向后兼容）。
+//!
+//! 优先级：环境变量 > config.toml > 内置默认值。
+//! 只有「服务/账号类」配置放这里；UI 偏好（播放顺序、上次选的源、下载位置）留在
+//! `settings.json`，别让同一个值有两个可改的地方。
+
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+/// config.toml 的模板，`zmusic config` 在文件不存在时写出来（带注释）
+pub const TEMPLATE: &str = r#"# zmusic 配置文件
+# 位置：~/.config/zmusic/config.toml
+# 环境变量仍可覆盖这里的值（NCM_API / NCM_DIR / NCM_QUALITY / ZMUSIC_PROXY ...）
+
+[general]
+# 音质：standard / higher / exhigh / lossless / hires
+quality = "exhigh"
+# 下载目录（支持 ~）
+download_dir = "~/Music/ncm"
+
+[netease]
+# ncm-api 服务地址（Node >= 22，仓库里 ./setup.sh 会装成 systemd --user 服务）
+api_base = "http://127.0.0.1:3000"
+
+[meting]
+# Meting 侧车地址（腾讯/酷狗/百度/酷我）。装包后先：
+#   systemctl --user enable --now meting-sidecar
+url = "http://127.0.0.1:8123"
+# 可选：平台 cookie，用于会员/受限曲目换流。留空则这些源只能搜不能播。
+# 只从本地文件/环境变量读，别提交进仓库。取法见 docs/CONFIG.md
+cookie = ""
+
+[ytdlp]
+# yt-dlp 可执行文件名或绝对路径（YouTube / SoundCloud 源用）
+binary = "yt-dlp"
+# YouTube/SoundCloud 需要代理；zmusic 与 mpv 会走同一个出口。
+# 例：proxy = "socks5h://127.0.0.1:1080"
+proxy = ""
+
+[jamendo]
+# Jamendo 免费申请的 client_id（https://devportal.jamendo.com/）
+client_id = ""
+"#;
+
+#[derive(Debug, Default, Deserialize)]
+struct General {
+    #[serde(default)]
+    quality: Option<String>,
+    #[serde(default)]
+    download_dir: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Netease {
+    #[serde(default)]
+    api_base: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Meting {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    cookie: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct YtDlp {
+    #[serde(default)]
+    binary: Option<String>,
+    #[serde(default)]
+    proxy: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Jamendo {
+    #[serde(default)]
+    client_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FileConfig {
+    #[serde(default)]
+    general: General,
+    #[serde(default)]
+    netease: Netease,
+    #[serde(default)]
+    meting: Meting,
+    #[serde(default)]
+    ytdlp: YtDlp,
+    #[serde(default)]
+    jamendo: Jamendo,
+}
 
 pub struct Config {
-    pub api_base: String,
     pub download_dir: PathBuf,
     pub quality: String,
-    /// 可选代理（如 socks5h://127.0.0.1:11080）；YouTube 源与 mpv 必须同一出口
+    pub api_base: String,
+    pub meting_url: String,
+    pub meting_cookie: Option<String>,
     pub proxy: Option<String>,
-    /// Meting 侧车地址
-    pub meting_base: String,
+    pub ytdlp_binary: String,
+    pub jamendo_client_id: Option<String>,
+    pub config_path: PathBuf,
     pub favorites_path: PathBuf,
     pub settings_path: PathBuf,
 }
 
+fn non_empty(v: String) -> Option<String> {
+    let t = v.trim().to_string();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+fn expand_tilde(s: &str, home: &Path) -> PathBuf {
+    if let Some(rest) = s.strip_prefix("~/") {
+        home.join(rest)
+    } else if s == "~" {
+        home.to_path_buf()
+    } else {
+        PathBuf::from(s)
+    }
+}
+
 impl Config {
+    /// 读取配置；`config.toml` 不存在时用内置默认值（不自动创建，创建是 `zmusic config` 的事）
     pub fn load() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let api_base =
-            std::env::var("NCM_API").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
-        let download_dir = std::env::var("NCM_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join("Music").join("ncm"));
-        let quality = std::env::var("NCM_QUALITY").unwrap_or_else(|_| "exhigh".to_string());
-        let meting_base = std::env::var("ZMUSIC_METING_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
-        let proxy = std::env::var("ZMUSIC_PROXY")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| home.join(".config"))
             .join("zmusic");
-        let favorites_path = config_dir.join("favorites.json");
-        let settings_path = config_dir.join("settings.json");
-        let _ = std::fs::create_dir_all(&download_dir);
+        let config_path = config_dir.join("config.toml");
+        let text = std::fs::read_to_string(&config_path).ok();
+        let cfg = Self::resolve(text.as_deref(), &|k| std::env::var(k).ok(), &home);
+        let _ = std::fs::create_dir_all(&cfg.download_dir);
+        cfg
+    }
+
+    /// 纯逻辑：文件文本 + 环境变量查询闭包 → 最终配置（方便单测）
+    fn resolve(file: Option<&str>, env: &dyn Fn(&str) -> Option<String>, home: &Path) -> Self {
+        let parsed: FileConfig = file
+            .and_then(|t| toml::from_str(t).ok())
+            .unwrap_or_default();
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| home.join(".config"))
+            .join("zmusic");
+
+        let pick = |env_key: &str, file_val: Option<String>, default: &str| -> String {
+            env(env_key)
+                .and_then(non_empty)
+                .or_else(|| file_val.and_then(non_empty))
+                .unwrap_or_else(|| default.to_string())
+        };
+        let pick_opt = |env_key: &str, file_val: Option<String>| -> Option<String> {
+            env(env_key)
+                .and_then(non_empty)
+                .or_else(|| file_val.and_then(non_empty))
+        };
+
+        let download_dir = match pick_opt("NCM_DIR", parsed.general.download_dir) {
+            Some(v) => expand_tilde(&v, home),
+            None => home.join("Music").join("ncm"),
+        };
         Config {
-            api_base,
             download_dir,
-            quality,
-            proxy,
-            meting_base,
-            favorites_path,
-            settings_path,
+            quality: pick("NCM_QUALITY", parsed.general.quality, "exhigh"),
+            api_base: pick("NCM_API", parsed.netease.api_base, "http://127.0.0.1:3000"),
+            meting_url: pick(
+                "ZMUSIC_METING_URL",
+                parsed.meting.url,
+                "http://127.0.0.1:8123",
+            ),
+            meting_cookie: pick_opt("ZMUSIC_METING_COOKIE", parsed.meting.cookie),
+            proxy: pick_opt("ZMUSIC_PROXY", parsed.ytdlp.proxy),
+            ytdlp_binary: pick("ZMUSIC_YTDLP_BIN", parsed.ytdlp.binary, "yt-dlp"),
+            jamendo_client_id: pick_opt("ZMUSIC_JAMENDO_CLIENT_ID", parsed.jamendo.client_id),
+            config_path: config_dir.join("config.toml"),
+            favorites_path: config_dir.join("favorites.json"),
+            settings_path: config_dir.join("settings.json"),
         }
+    }
+
+    /// 确保配置文件存在（不存在就写模板），返回路径
+    pub fn ensure_config_file(&self) -> std::io::Result<PathBuf> {
+        if !self.config_path.exists() {
+            if let Some(dir) = self.config_path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(&self.config_path, TEMPLATE)?;
+        }
+        Ok(self.config_path.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
+    fn home() -> PathBuf {
+        PathBuf::from("/home/tester")
+    }
+
+    #[test]
+    fn missing_file_uses_defaults() {
+        let c = Config::resolve(None, &no_env, &home());
+        assert_eq!(c.quality, "exhigh");
+        assert_eq!(c.api_base, "http://127.0.0.1:3000");
+        assert_eq!(c.meting_url, "http://127.0.0.1:8123");
+        assert_eq!(c.ytdlp_binary, "yt-dlp");
+        assert_eq!(c.proxy, None);
+        assert_eq!(c.meting_cookie, None);
+        assert_eq!(c.download_dir, PathBuf::from("/home/tester/Music/ncm"));
+    }
+
+    #[test]
+    fn partial_file_fills_missing_keys_with_defaults() {
+        let text = r#"
+[meting]
+url = "http://127.0.0.1:9999"
+"#;
+        let c = Config::resolve(Some(text), &no_env, &home());
+        assert_eq!(c.meting_url, "http://127.0.0.1:9999");
+        // 没写的字段仍然是默认值
+        assert_eq!(c.quality, "exhigh");
+        assert_eq!(c.api_base, "http://127.0.0.1:3000");
+        assert_eq!(c.ytdlp_binary, "yt-dlp");
+    }
+
+    #[test]
+    fn file_values_are_used_and_tilde_expanded() {
+        let text = r#"
+[general]
+quality = "lossless"
+download_dir = "~/Music/zm"
+
+[netease]
+api_base = "http://10.0.0.2:3000"
+
+[meting]
+cookie = "uin=o1; qm_keyst=x"
+
+[ytdlp]
+proxy = "socks5h://127.0.0.1:1080"
+binary = "/usr/local/bin/yt-dlp"
+
+[jamendo]
+client_id = "abc123"
+"#;
+        let c = Config::resolve(Some(text), &no_env, &home());
+        assert_eq!(c.quality, "lossless");
+        assert_eq!(c.download_dir, PathBuf::from("/home/tester/Music/zm"));
+        assert_eq!(c.api_base, "http://10.0.0.2:3000");
+        assert_eq!(c.meting_cookie.as_deref(), Some("uin=o1; qm_keyst=x"));
+        assert_eq!(c.proxy.as_deref(), Some("socks5h://127.0.0.1:1080"));
+        assert_eq!(c.ytdlp_binary, "/usr/local/bin/yt-dlp");
+        assert_eq!(c.jamendo_client_id.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn env_overrides_file_value() {
+        let text = r#"
+[general]
+quality = "standard"
+[netease]
+api_base = "http://file:3000"
+[meting]
+url = "http://file:8123"
+"#;
+        let env = |k: &str| -> Option<String> {
+            match k {
+                "NCM_QUALITY" => Some("hires".to_string()),
+                "ZMUSIC_METING_URL" => Some("http://env:8123".to_string()),
+                _ => None,
+            }
+        };
+        let c = Config::resolve(Some(text), &env, &home());
+        assert_eq!(c.quality, "hires", "env 覆盖文件");
+        assert_eq!(c.meting_url, "http://env:8123", "env 覆盖文件");
+        assert_eq!(c.api_base, "http://file:3000", "没设 env 的仍用文件值");
+    }
+
+    #[test]
+    fn empty_env_var_does_not_override() {
+        let env = |k: &str| -> Option<String> {
+            if k == "ZMUSIC_PROXY" {
+                Some("   ".to_string())
+            } else {
+                None
+            }
+        };
+        let c = Config::resolve(None, &env, &home());
+        assert_eq!(c.proxy, None, "空字符串等于没配");
+    }
+
+    #[test]
+    fn template_is_valid_toml_and_parses_cleanly() {
+        let c = Config::resolve(Some(TEMPLATE), &no_env, &home());
+        assert_eq!(c.quality, "exhigh");
+        assert_eq!(c.download_dir, PathBuf::from("/home/tester/Music/ncm"));
+        assert_eq!(c.proxy, None);
     }
 }

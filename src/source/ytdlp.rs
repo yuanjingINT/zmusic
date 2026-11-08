@@ -99,10 +99,6 @@ pub struct YtDlpSource {
 }
 
 impl YtDlpSource {
-    pub fn new(site: Site) -> Self {
-        Self::with_proxy(site, "yt-dlp", None)
-    }
-
     #[cfg(test)]
     pub fn with_exe(site: Site, exe: &str) -> Self {
         Self::with_proxy(site, exe, None)

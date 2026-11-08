@@ -1,0 +1,146 @@
+# zmusic 配置指南
+
+zmusic 的所有服务/账号配置都在一个文件里：
+
+```
+~/.config/zmusic/config.toml
+```
+
+生成并打开它：
+
+```bash
+zmusic config          # 不存在就从内置模板生成，然后用 $EDITOR/$VISUAL/vi 打开
+zmusic config --print  # 只打印路径
+```
+
+优先级：**环境变量 > config.toml > 内置默认值**。老的环境变量（`NCM_API`、`NCM_DIR`、
+`NCM_QUALITY`、`ZMUSIC_PROXY`、`ZMUSIC_METING_URL`、`ZMUSIC_METING_COOKIE`、
+`ZMUSIC_JAMENDO_CLIENT_ID`、`ZMUSIC_YTDLP_BIN`）都还生效，适合临时覆盖。
+
+UI 偏好（播放顺序、上次选的源、下载位置）存在 `~/.config/zmusic/settings.json`，
+不在 config.toml 里，避免同一个值两处能改。
+
+## 源 → 需要什么
+
+| 源 | 默认可用 | 需要什么 |
+|----|----------|----------|
+| 网易云 | 是 | 本地 ncm-api（`[netease] api_base`，默认 `127.0.0.1:3000`） |
+| QQ 音乐（直连） | 是 | 无；免费曲目可播，会员曲提示不可播放 |
+| QQ / 酷狗 / 千千 / 酷我（Meting） | 侧车起来就能搜 | `meting-sidecar` 服务；要播受限曲目还要 `[meting] cookie` |
+| 咪咕 | 是 | 无（公开接口） |
+| bilibili | 是 | 无（搜索用 bilibili 接口，取流借 `yt-dlp`） |
+| YouTube / SoundCloud | 装了 yt-dlp 就能搜 | `[ytdlp] binary` + **代理**（国内直连不通） |
+| Audius | 是 | 无 |
+| ccMixter | 是 | 无；音乐直链常被站点 403，运行期失败就降级 |
+| Jamendo | 否 | `[jamendo] client_id`（免费申请） |
+| Wikimedia Commons | 是 | 只解析 IPv6，网络没有 IPv6 时降级 |
+| OpenGameArt | 是 | 无（抓页面） |
+
+「能搜不能播」的源（例如没配 cookie 的 Meting）在列表里可见，但标「仅搜索」，
+聚合搜索不会把它们的结果塞进播放队列。
+
+## 1. 网易云（必须）
+
+播放器本身不带网易云 API，需要一个本地服务：
+
+```bash
+cd ~/Projects/zmusic      # 或解包目录
+./setup.sh                # 首次：装依赖 + 起 systemd --user 服务 ncm-api
+./setup.sh update         # 之后：更新 API 并重启
+```
+
+要求 Node ≥ 22。验证：
+
+```bash
+curl -s 'http://127.0.0.1:3000/search?keywords=%E6%99%B4%E5%A4%A9&limit=1' | head -c 120
+```
+
+换地址就改 `config.toml`：
+
+```toml
+[netease]
+api_base = "http://127.0.0.1:3000"
+```
+
+## 2. Meting 侧车（腾讯/酷狗/千千/酷我）
+
+装包后侧车是 disabled 的，先启用：
+
+```bash
+systemctl --user enable --now meting-sidecar
+systemctl --user status meting-sidecar --no-pager   # 应为 active
+curl -s '127.0.0.1:8123/api?server=tencent&type=search&id=%E6%99%B4%E5%A4%A9&limit=1'
+```
+
+从源码跑的话在 `sidecar/` 里 `npm i && node meting.js`（或 `./setup.sh`）。
+
+地址可改：
+
+```toml
+[meting]
+url = "http://127.0.0.1:8123"
+```
+
+### 可选：cookie（受限曲目换流）
+
+不配 cookie 时 tencent/kugou **能搜不能播**（列表标「仅搜索」）。要播就去浏览器里拿 cookie：
+
+1. 打开目标站点并登录（如 `y.qq.com`）
+2. F12 → Network → 随便点一个请求 → Request Headers → 复制 `Cookie:` 整行的值
+3. 写进配置：
+
+```toml
+[meting]
+cookie = "uin=o0123456; qm_keyst=...; ..."
+```
+
+也可以用环境变量临时覆盖：`export ZMUSIC_METING_COOKIE='uin=...; qm_keyst=...'`。
+
+cookie 等价于该账号登录态：只放在本机 600 权限的文件/环境变量里，别提交进仓库、别外借。
+看到「仅搜索」还以为是 bug 的话，先检查这一项。
+
+## 3. YouTube / SoundCloud（需要代理）
+
+国内直连这两家都不通，需要一台海外出口：
+
+```bash
+# 例：借 VPS 开 SOCKS5
+ssh -f -N -D 127.0.0.1:1080 your-vps
+```
+
+```toml
+[ytdlp]
+binary = "yt-dlp"                       # 或绝对路径
+proxy  = "socks5h://127.0.0.1:1080"
+```
+
+关键约束：**zmusic 与 mpv 必须走同一个出口**。YouTube 的 googlevideo 直链把签名绑在出口 IP 上，
+换 IP 就 403。mpv 只认 HTTP 代理，所以配 `socks5(h)://` 时 zmusic 会在本机起一个只监听
+`127.0.0.1` 的 HTTP CONNECT → SOCKS5 小桥，只给 yt-dlp 系曲目用；其它源自动回直连。
+
+验证：
+
+```bash
+yt-dlp --proxy socks5h://127.0.0.1:1080 "ytsearch1:daft punk get lucky" --flat-playlist --dump-json
+yt-dlp --proxy socks5h://127.0.0.1:1080 -g -f bestaudio/best <上一步的 URL>
+```
+
+## 4. Jamendo（免费 key）
+
+1. 打开 <https://devportal.jamendo.com/> 注册一个应用
+2. 复制 Client ID
+3. 写进配置：
+
+```toml
+[jamendo]
+client_id = "你的 client_id"
+```
+
+没配时 Jamendo 源在列表里显示「需凭据」，不影响其它源。
+
+## 5. 排查
+
+- `zmusic config --print` 看的是不是你以为的那个文件
+- 顶栏 `源 9/15` 表示 15 个源里 9 个可用；按 `R` 重新探测
+- 缺 key/侧车没起标「需凭据」，网络挂了标「离线」，两者不要混
+- 单个源搜不到，先用 `curl` 直接打接口确认服务在不在

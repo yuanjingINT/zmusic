@@ -30,10 +30,11 @@ pub struct BilibiliSource {
 }
 
 impl BilibiliSource {
-    pub fn new() -> Self {
+    /// 指定 yt-dlp 可执行文件（config.toml `[ytdlp] binary`）
+    pub fn with_exe(exe: &str) -> Self {
         BilibiliSource {
             api: API.to_string(),
-            exe: "yt-dlp".to_string(),
+            exe: exe.to_string(),
             cookie: Mutex::new(None),
         }
     }
@@ -288,7 +289,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bilibili_live_search_and_stream() {
-        let src = BilibiliSource::new();
+        let src = BilibiliSource::with_exe("yt-dlp");
         let got = src
             .search("周杰伦 晴天", 5, SearchKind::Song)
             .expect("bilibili 搜索应成功");

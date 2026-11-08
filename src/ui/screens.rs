@@ -304,7 +304,7 @@ fn render_menu(f: &mut Frame, area: Rect, app: &mut App) {
         .iter()
         .enumerate()
         .map(|(i, name)| {
-            let num = Span::styled(format!(" {} ", i + 1), theme::primary());
+            let num = Span::styled(format!(" {i} "), theme::primary());
             let text = Span::styled(*name, theme::song_title());
             ListItem::new(Line::from(vec![num, text]))
         })

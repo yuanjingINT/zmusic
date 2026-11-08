@@ -12,10 +12,17 @@ pub struct MetingSource {
     server: &'static str,
     id_str: &'static str,
     label: &'static str,
+    /// 平台 cookie（config.toml 的 `[meting] cookie`，或 ZMUSIC_METING_COOKIE）
+    cookie: Option<String>,
 }
 
 impl MetingSource {
+    #[cfg(test)]
     pub fn new(base: String, server: &'static str) -> Self {
+        Self::with_cookie(base, server, None)
+    }
+
+    pub fn with_cookie(base: String, server: &'static str, cookie: Option<String>) -> Self {
         let (id_str, label) = match server {
             "tencent" => ("meting:tencent", "QQ 音乐 (Meting)"),
             "kugou" => ("meting:kugou", "酷狗 (Meting)"),
@@ -28,6 +35,7 @@ impl MetingSource {
             server,
             id_str,
             label,
+            cookie,
         }
     }
 }
@@ -99,10 +107,10 @@ pub fn parse_url(v: &Value) -> Option<String> {
 }
 
 impl MetingSource {
-    /// cookie 只从环境变量读（`ZMUSIC_METING_COOKIE`），不落盘、不进日志。
-    fn cookie() -> Option<String> {
-        std::env::var("ZMUSIC_METING_COOKIE")
-            .ok()
+    /// cookie 来自 config.toml / 环境变量，不落盘、不进日志。
+    fn cookie(&self) -> Option<String> {
+        self.cookie
+            .clone()
             .map(|c| c.trim().to_string())
             .filter(|c| !c.is_empty() && c.len() < 8192)
     }
@@ -111,7 +119,7 @@ impl MetingSource {
     fn get(&self, path: &str) -> Result<Value> {
         let url = format!("{}/api?{}", self.base, path);
         let mut req = http::client().get(&url);
-        if let Some(c) = Self::cookie() {
+        if let Some(c) = self.cookie() {
             req = req.header("x-meting-cookie", c);
         }
         let resp = req.send().with_context(|| format!("请求侧车失败: {url}"))?;
@@ -138,7 +146,7 @@ impl Source for MetingSource {
     fn capabilities(&self) -> Capabilities {
         // 没 cookie 时 tencent/kugou 能搜不能出流：标「仅搜索」，聚合不并进播放队列。
         // baidu/kuwo 上游本身返回空壳，配了 cookie 也当不能播。
-        let with_creds = Self::cookie().is_some() && matches!(self.server, "tencent" | "kugou");
+        let with_creds = self.cookie().is_some() && matches!(self.server, "tencent" | "kugou");
         Capabilities {
             kinds: vec![SearchKind::Song],
             lyrics: false,

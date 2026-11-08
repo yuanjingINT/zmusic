@@ -15,11 +15,11 @@ pub struct JamendoSource {
 }
 
 impl JamendoSource {
-    pub fn new() -> Self {
+    /// `client_id` 来自 config.toml `[jamendo]`（或 ZMUSIC_JAMENDO_CLIENT_ID）
+    pub fn with_client_id(client_id: Option<String>) -> Self {
         JamendoSource {
             base: BASE.to_string(),
-            client_id: std::env::var("ZMUSIC_JAMENDO_CLIENT_ID")
-                .ok()
+            client_id: client_id
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
         }

@@ -33,7 +33,8 @@ use std::time::{Duration, Instant};
 /// 聚合伪源：搜索时并发问所有 `Ok` 的源再合并
 pub const AGGREGATE_ID: &str = "aggregate";
 
-pub const MENU_ITEMS: [&str; 8] = [
+/// 主菜单；编号从 0 开始（数字键 0–6 直达）。配置统一进 `config.toml`，不再有设置页入口。
+pub const MENU_ITEMS: [&str; 7] = [
     "搜索音乐",
     "歌曲推荐",
     "专辑推荐",
@@ -41,7 +42,6 @@ pub const MENU_ITEMS: [&str; 8] = [
     "我的下载",
     "我的收藏",
     "超级下载",
-    "设置",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1246,6 +1246,11 @@ impl App {
                 self.search_input_focus = true;
             }
             KeyCode::Char('S') => self.cycle_source(),
+            // 主菜单：0–6 直达对应项
+            KeyCode::Char(c @ '0'..='6') if self.screen == ScreenKind::Menu => {
+                self.menu_sel = (c as u8 - b'0') as usize;
+                self.activate_menu();
+            }
             KeyCode::Char('R') => self.reprobe_with_toast(),
             KeyCode::Char('V') => {
                 if self.screen == ScreenKind::Search {
@@ -2019,12 +2024,6 @@ impl App {
                 self.goto(ScreenKind::SuperDl);
                 if self.super_devices.is_empty() {
                     self.load_super_devices();
-                }
-            }
-            7 => {
-                self.goto(ScreenKind::Settings);
-                if self.settings_usb.is_empty() && !self.settings_usb_loading {
-                    self.load_settings_usb();
                 }
             }
             _ => {}
