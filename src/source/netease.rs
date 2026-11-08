@@ -104,7 +104,6 @@ impl NetEaseSource {
                     },
                     dt: song.duration,
                     fee: song.fee,
-                    ..Default::default()
                 })
             })
             .collect();
