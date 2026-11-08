@@ -413,6 +413,12 @@ impl App {
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()> {
         // 启动即后台探源：这里只起线程，不等待，界面照常进出
         self.start_probe();
+        // 首帧之前积压的输入（多半是拉起程序的回车/误触）在开屏时一次性丢掉，
+        // 之后不再按时间窗口吞键——否则「启动后立刻按 s」会没反应。
+        while event::poll(Duration::ZERO)? {
+            let _ = event::read()?;
+        }
+        let _ = self.started;
         loop {
             terminal.draw(|f| screens::render_all(f, self))?;
             if self.quit {
@@ -1316,9 +1322,6 @@ impl App {
     }
 
     fn handle_key(&mut self, k: KeyEvent) {
-        if self.started.elapsed() < Duration::from_millis(150) {
-            return;
-        }
         if self.ctx_open {
             let n = self.ctx_items().len();
             match k.code {
