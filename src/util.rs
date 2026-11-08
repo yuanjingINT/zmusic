@@ -33,8 +33,8 @@ pub fn fmt_time_into(out: &mut String, secs: Option<f64>) {
     }
 }
 
+/// 追加到缓冲区（不清空）：调用方自己决定要不要前置分隔符
 pub fn artists_of_into(out: &mut String, ar: &[Artist]) {
-    out.clear();
     for (i, a) in ar.iter().enumerate() {
         if i > 0 {
             out.push_str(" & ");
