@@ -109,7 +109,15 @@ sudo apt install build-essential pkg-config libssl-dev
 ./setup.sh update   # 更新 API 到最新版并重启
 ```
 
-`install.sh` 生成的启动器会在每次启动播放器时自动执行 `setup.sh update`，所以装了启动器之后一般不用手动管。
+`install.sh` 生成的启动器（`~/.local/bin/zmusic` → 仓库里的 `run.sh`）**不会联网更新**：
+它只做三件事——二进制比源码旧时增量 `cargo build --release`、`ncm-api` 没跑时
+`systemctl --user start ncm-api`、然后 `exec target/release/zmusic`。所以菜单是秒开的。
+
+想更新 API 服务时手动跑（不再挂在启动路径上）：
+
+```bash
+./setup.sh update
+```
 
 ## 配置
 

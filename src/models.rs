@@ -32,6 +32,13 @@ pub struct Song {
     pub s_id: String,
 }
 
+/// 歌单创建者（网易云返回 `creator: { nickname }`）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlaylistCreator {
+    pub nickname: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 #[derive(Default)]
@@ -41,6 +48,14 @@ pub struct Playlist {
     pub play_count: i64,
     pub track_count: i32,
     pub cover_img_url: Option<String>,
+    /// 创建者；老 JSON / 其它源可能没有，默认空串
+    pub creator: PlaylistCreator,
+}
+
+impl Playlist {
+    pub fn creator_name(&self) -> &str {
+        &self.creator.nickname
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,6 +66,7 @@ pub struct PlaylistDetail {
     pub name: String,
     pub track_count: i32,
     pub cover_img_url: Option<String>,
+    pub creator: PlaylistCreator,
 }
 
 #[derive(Debug, Clone, Deserialize)]

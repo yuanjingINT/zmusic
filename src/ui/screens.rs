@@ -680,11 +680,20 @@ fn render_playlists_list(
         .skip(top)
         .take(count)
         .map(|p| {
-            let meta = format!(
-                "  {}播放 · {}首",
-                util::fmt_count(p.play_count),
-                p.track_count
-            );
+            let meta = if p.creator_name().is_empty() {
+                format!(
+                    "  {}播放 · {}首",
+                    util::fmt_count(p.play_count),
+                    p.track_count
+                )
+            } else {
+                format!(
+                    "  {} · {}播放 · {}首",
+                    p.creator_name(),
+                    util::fmt_count(p.play_count),
+                    p.track_count
+                )
+            };
             let mut spans = vec![Span::raw(p.name.clone()), Span::styled(meta, theme::dim())];
             if let Some(src) = tag.and_then(|t| t(p)) {
                 spans.push(Span::styled(format!("  {src}"), theme::dim()));

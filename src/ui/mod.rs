@@ -284,7 +284,13 @@ impl App {
             let api = NetEaseSource::clone(&api);
             let tx = tx.clone();
             thread::spawn(move || {
-                let _ = api.search("a", 1, crate::source::SearchKind::Song);
+                // ncm-api 可能刚被启动器拉起来，给几次重试（后台，不挡首帧）
+                for _ in 0..4 {
+                    if api.search("a", 1, crate::source::SearchKind::Song).is_ok() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(800));
+                }
                 drop(tx);
             });
         }
@@ -1226,6 +1232,7 @@ impl App {
             play_count: 0,
             track_count: 0,
             cover_img_url: a.pic_url,
+            creator: crate::models::PlaylistCreator::default(),
         });
         self.ctx_song = None;
         self.ctx_sel = 0;

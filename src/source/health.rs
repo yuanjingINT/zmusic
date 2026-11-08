@@ -194,9 +194,9 @@ pub fn artist_key(a: &crate::models::ArtistInfo) -> String {
     format!("a|{}", normalize(&a.name))
 }
 
-/// 歌单去重键：名字（模型里没有创建者字段，只能按名字）
+/// 歌单去重键：名字 + 创建者（不同人的同名歌单不能合并）
 pub fn playlist_key(p: &crate::models::Playlist) -> String {
-    format!("p|{}", normalize(&p.name))
+    format!("p|{}|{}", normalize(&p.name), normalize(p.creator_name()))
 }
 
 /// 专辑去重键：名字 + 歌手
@@ -427,6 +427,31 @@ mod tests {
         );
         assert_eq!(normalize("ＡＢＣ　ＤＥＦ"), "abc def", "全角字母转半角");
         assert_eq!(normalize("a    b"), "a b", "连续空白压成一个");
+    }
+
+    #[test]
+    fn playlist_key_includes_creator() {
+        use crate::models::{Playlist, PlaylistCreator};
+        let mk = |name: &str, creator: &str| Playlist {
+            id: 1,
+            name: name.into(),
+            play_count: 0,
+            track_count: 0,
+            cover_img_url: None,
+            creator: PlaylistCreator {
+                nickname: creator.into(),
+            },
+        };
+        // 同名不同创建者不能合并
+        assert_ne!(
+            playlist_key(&mk("夜曲", "张三")),
+            playlist_key(&mk("夜曲", "李四"))
+        );
+        // 名字/创建者的空格与大小写差异要合并
+        assert_eq!(
+            playlist_key(&mk("My List", "Jay")),
+            playlist_key(&mk(" my list ", " jay "))
+        );
     }
 
     #[test]
