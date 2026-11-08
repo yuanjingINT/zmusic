@@ -26,6 +26,22 @@ impl UsbDevice {
 }
 
 pub fn detect_usb() -> anyhow::Result<Vec<UsbDevice>> {
+    // 测试/无盘：设了 ZMUSIC_SUPERDL_DIR 就给一个「不会格式化」的合成条目，
+    // 这样没有 U 盘也能从界面把超级下载跑到落盘（run_super_download 会跳过格式化）
+    if let Ok(dir) = std::env::var("ZMUSIC_SUPERDL_DIR") {
+        let dir = dir.trim().to_string();
+        if !dir.is_empty() {
+            return Ok(vec![UsbDevice {
+                name: "ZMUSIC_SUPERDL_DIR".to_string(),
+                size: free_space(&dir),
+                path: dir.clone(),
+                part: None,
+                model: "本地目录（不格式化）".to_string(),
+                mount: Some(dir),
+                fs: None,
+            }]);
+        }
+    }
     let out = Command::new("lsblk")
         .args([
             "-J",
