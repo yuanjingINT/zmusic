@@ -184,8 +184,10 @@ impl Source for BilibiliSource {
         "国内"
     }
 
+    /// 搜索走 bilibili 自己的 HTTP web API，只有**取流**才借 yt-dlp，
+    /// 所以搜索阶段不该占子进程并发名额（限流只给"搜索本身要 fork"的 yt-dlp 源）
     fn is_subprocess(&self) -> bool {
-        true
+        false
     }
 
     fn capabilities(&self) -> Capabilities {

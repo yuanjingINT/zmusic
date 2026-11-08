@@ -226,7 +226,9 @@ pub fn run<F: FnMut(Part)>(
                 if let Err(ref e) = r {
                     stats.failed += 1;
                     stats.failed_ids.push(id.clone());
-                    eprintln!("[agg] {id} 失败（{:?}）: {e}", elapsed);
+                    // 注意：这里是 TUI 进程内的后台线程，绝不能 println/eprintln——
+                    // 会直接写穿终端画面。要看明细用 AGG_TRACE 压测，不在正文打印。
+                    let _ = e;
                 }
                 on_part(Part {
                     id,
@@ -331,6 +333,7 @@ mod bench {
             ),
         ];
         let only = std::env::var("AGG_ONLY").ok();
+        let query = std::env::var("AGG_QUERY").unwrap_or_else(|_| "晴天".to_string());
         // 缓存命中演示：不 clear，紧接着再搜一次同样的词
         let cached_cfg = Config {
             workers: 24,
@@ -338,7 +341,7 @@ mod bench {
             timeout: Duration::from_secs(5),
             use_cache: true,
         };
-        let stats = run(targets(), "晴天", 20, cached_cfg, |_| {});
+        let stats = run(targets(), &query, 20, cached_cfg, |_| {});
         println!(
             "cache-hit repeat ttfb_ms={:?} total_ms={} timedout={}",
             stats.first_result.map(|d| d.as_millis()),
@@ -357,7 +360,7 @@ mod bench {
                 let mut n = 0;
                 let mut first: Option<(String, u128)> = None;
                 let trace = std::env::var("AGG_TRACE").is_ok() && round == 1;
-                let stats = run(targets(), "晴天", 20, cfg, |p| {
+                let stats = run(targets(), &query, 20, cfg, |p| {
                     n += 1;
                     if trace {
                         let n_songs = match &p.result {
