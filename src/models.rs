@@ -159,6 +159,15 @@ pub struct Lyrics {
     pub trans: Vec<(u64, String)>,
 }
 
+impl Default for Lyrics {
+    fn default() -> Self {
+        Lyrics {
+            lines: Vec::new(),
+            trans: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 #[derive(Default)]

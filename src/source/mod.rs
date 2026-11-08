@@ -5,6 +5,7 @@
 //! 搜索类型用枚举（不再把网易云的 1/100/1000/10 漏到上层）。
 
 pub mod netease;
+pub mod youtube;
 
 use crate::models::{Lyrics, SearchResult};
 use anyhow::{anyhow, Result};
@@ -69,6 +70,10 @@ pub trait Source: Send + Sync {
     fn id(&self) -> &'static str;
     /// 给人看的名字
     fn name(&self) -> &'static str;
+    /// 源当前能不能用（进程/依赖在不在）；缺依赖的源在 UI 上置灰，不影响其它源
+    fn is_available(&self) -> bool {
+        true
+    }
     fn search(&self, keyword: &str, limit: i32, kind: SearchKind) -> Result<SearchResult>;
     fn lyric(&self, id: &TrackId) -> Result<Lyrics>;
     /// 取播放地址；拿不到（无版权/需会员/流过期）时返回 Ok(None)
@@ -89,11 +94,26 @@ impl SourceRegistry {
         }
     }
 
-    /// 目前只有网易云；`base` 是它的 API 地址
+    /// 默认注册网易云 + YouTube（后者依赖 yt-dlp，缺了就自己标不可用）
     pub fn with_defaults(netease_base: String) -> Self {
         let mut reg = SourceRegistry::new();
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
+        reg.register(Arc::new(youtube::YouTubeSource::new()));
         reg
+    }
+
+    /// 按 source 标识搜索
+    pub fn search(
+        &self,
+        source: &str,
+        keyword: &str,
+        limit: i32,
+        kind: SearchKind,
+    ) -> Result<SearchResult> {
+        match self.get(source) {
+            Some(s) => s.search(keyword, limit, kind),
+            None => Err(anyhow!("未知音乐源: {}（没有对应的 adapter）", source)),
+        }
     }
 
     pub fn register(&mut self, src: Arc<dyn Source>) {
@@ -136,11 +156,12 @@ mod tests {
     #[test]
     fn netease_registered_by_default() {
         let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string());
-        assert_eq!(reg.len(), 1);
+        assert_eq!(reg.len(), 2);
         let s = reg.get("netease").expect("默认应注册网易云");
         assert_eq!(s.id(), "netease");
         assert_eq!(s.name(), "网易云音乐");
-        assert!(reg.get("youtube").is_none());
+        assert!(reg.get("youtube").is_some(), "YouTube 也应默认注册");
+        assert!(reg.get("spotify").is_none());
     }
 
     #[test]
@@ -149,18 +170,18 @@ mod tests {
         reg.register(Arc::new(netease::NetEaseSource::new(
             "http://127.0.0.1:3000".to_string(),
         )));
-        assert_eq!(reg.len(), 1);
+        assert_eq!(reg.len(), 2);
     }
 
     #[test]
     fn unknown_source_stream_url_errors_clearly() {
         let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string());
         let err = reg
-            .stream_url("youtube", &TrackId::from("dQw4w9WgXcQ"), "exhigh")
+            .stream_url("spotify", &TrackId::from("dQw4w9WgXcQ"), "exhigh")
             .expect_err("未知源必须报错");
         let msg = err.to_string();
         assert!(msg.contains("未知音乐源"), "错误信息应说明未知源: {msg}");
-        assert!(msg.contains("youtube"), "错误信息应带上源名: {msg}");
+        assert!(msg.contains("spotify"), "错误信息应带上源名: {msg}");
     }
 
     #[test]
