@@ -27,7 +27,9 @@ impl Config {
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
-        let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config")).join("zmusic");
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| home.join(".config"))
+            .join("zmusic");
         let favorites_path = config_dir.join("favorites.json");
         let settings_path = config_dir.join("settings.json");
         let _ = std::fs::create_dir_all(&download_dir);

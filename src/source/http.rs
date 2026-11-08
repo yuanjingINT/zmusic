@@ -25,7 +25,8 @@ pub fn get_json(url: &str) -> Result<Value> {
     if !resp.status().is_success() {
         return Err(anyhow!("HTTP {}: {url}", resp.status()));
     }
-    resp.json::<Value>().with_context(|| format!("JSON 解析失败: {url}"))
+    resp.json::<Value>()
+        .with_context(|| format!("JSON 解析失败: {url}"))
 }
 
 pub fn get_text(url: &str) -> Result<String> {

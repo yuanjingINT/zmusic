@@ -73,7 +73,10 @@ fn song_from_page(page: &Value) -> Option<Song> {
     Some(Song {
         id: 0,
         name,
-        ar: vec![Artist { id: 0, name: artist }],
+        ar: vec![Artist {
+            id: 0,
+            name: artist,
+        }],
         al: Album {
             id: 0,
             name: "Wikimedia Commons".to_string(),

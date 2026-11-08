@@ -38,7 +38,13 @@ impl JamendoSource {
             .client_id
             .as_deref()
             .ok_or_else(|| anyhow!("Jamendo 需要 ZMUSIC_JAMENDO_CLIENT_ID"))?;
-        Ok(format!("{}{}?client_id={}&format=json{}", self.base, path, http::enc(id), ""))
+        Ok(format!(
+            "{}{}?client_id={}&format=json{}",
+            self.base,
+            path,
+            http::enc(id),
+            ""
+        ))
     }
 }
 
@@ -164,8 +170,13 @@ mod tests {
     fn missing_client_id_is_unavailable() {
         let s = JamendoSource::with_base(BASE, None);
         assert!(!s.is_available());
-        let err = s.search("x", 5, SearchKind::Song).expect_err("无 key 必须报错");
-        assert!(err.to_string().contains("ZMUSIC_JAMENDO_CLIENT_ID"), "{err}");
+        let err = s
+            .search("x", 5, SearchKind::Song)
+            .expect_err("无 key 必须报错");
+        assert!(
+            err.to_string().contains("ZMUSIC_JAMENDO_CLIENT_ID"),
+            "{err}"
+        );
     }
 
     #[test]

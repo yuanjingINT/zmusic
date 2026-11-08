@@ -1,24 +1,24 @@
-pub mod screens;
 mod hints;
 mod nav;
 mod playback;
+pub mod screens;
 mod search_keys;
 mod theme;
 
-use crate::source::netease::NetEaseSource;
-use crate::source::SourceRegistry;
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::favorites::Favorites;
 use crate::models::{ArtistInfo, Lyrics, Playlist, RecAlbum, SearchResult, Song};
 use crate::player::Player;
 use crate::settings::Settings;
+use crate::source::netease::NetEaseSource;
+use crate::source::SourceRegistry;
 use crate::superdl::{self, UsbDevice};
-use nav::NavStack;
-use playback::PlayMode;
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use nav::NavStack;
+use playback::PlayMode;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
@@ -215,9 +215,7 @@ impl App {
             downloader,
             quality,
             failed_sources: std::collections::HashSet::new(),
-            source_id: if !settings.source.is_empty()
-                && registry.get(&settings.source).is_some()
-            {
+            source_id: if !settings.source.is_empty() && registry.get(&settings.source).is_some() {
                 settings.source.clone()
             } else {
                 "netease".to_string()
@@ -408,8 +406,7 @@ impl App {
         self.super_lines.clear();
         self.super_lines.push(format!(
             "正在准备: {} ({}) - 注意! 该设备将被格式化, 数据会全部丢失",
-            dev.path,
-            dev.model
+            dev.path, dev.model
         ));
         let api_base = self.cfg.api_base.clone();
         let quality = self.cfg.quality.clone();
@@ -543,7 +540,9 @@ impl App {
                     self.playlists_loading = false;
                     match r {
                         Ok(v) => self.playlists = v,
-                        Err(e) => self.toast = Some((format!("歌单推荐加载失败: {}", e), Instant::now())),
+                        Err(e) => {
+                            self.toast = Some((format!("歌单推荐加载失败: {}", e), Instant::now()))
+                        }
                     }
                 }
                 AppMsg::Songs(r) => {
@@ -553,7 +552,9 @@ impl App {
                             self.songs = v;
                             self.songs_sel = 0;
                         }
-                        Err(e) => self.toast = Some((format!("歌曲推荐加载失败: {}", e), Instant::now())),
+                        Err(e) => {
+                            self.toast = Some((format!("歌曲推荐加载失败: {}", e), Instant::now()))
+                        }
                     }
                 }
                 AppMsg::Albums(r) => {
@@ -563,7 +564,9 @@ impl App {
                             self.albums = v;
                             self.albums_sel = 0;
                         }
-                        Err(e) => self.toast = Some((format!("专辑推荐加载失败: {}", e), Instant::now())),
+                        Err(e) => {
+                            self.toast = Some((format!("专辑推荐加载失败: {}", e), Instant::now()))
+                        }
                     }
                 }
                 AppMsg::Search(r) => {
@@ -595,7 +598,9 @@ impl App {
                             self.lib = songs;
                             self.lib_sel = 0;
                         }
-                        Err(e) => self.toast = Some((format!("歌单加载失败: {}", e), Instant::now())),
+                        Err(e) => {
+                            self.toast = Some((format!("歌单加载失败: {}", e), Instant::now()))
+                        }
                     }
                 }
                 AppMsg::AlbumDetail(r) => {
@@ -606,7 +611,9 @@ impl App {
                             self.lib = songs;
                             self.lib_sel = 0;
                         }
-                        Err(e) => self.toast = Some((format!("专辑加载失败: {}", e), Instant::now())),
+                        Err(e) => {
+                            self.toast = Some((format!("专辑加载失败: {}", e), Instant::now()))
+                        }
                     }
                 }
                 AppMsg::ArtistDetail(r) => {
@@ -617,7 +624,9 @@ impl App {
                             self.lib = songs;
                             self.lib_sel = 0;
                         }
-                        Err(e) => self.toast = Some((format!("歌手歌曲加载失败: {}", e), Instant::now())),
+                        Err(e) => {
+                            self.toast = Some((format!("歌手歌曲加载失败: {}", e), Instant::now()))
+                        }
                     }
                 }
                 AppMsg::SuperDevices(r) => {
@@ -627,14 +636,18 @@ impl App {
                             self.super_devices = v;
                             self.super_sel = 0;
                         }
-                        Err(e) => self.toast = Some((format!("USB 设备检测失败: {}", e), Instant::now())),
+                        Err(e) => {
+                            self.toast = Some((format!("USB 设备检测失败: {}", e), Instant::now()))
+                        }
                     }
                 }
                 AppMsg::SettingsUsb(r) => {
                     self.settings_usb_loading = false;
                     match r {
                         Ok(v) => self.settings_usb = v,
-                        Err(e) => self.toast = Some((format!("USB 设备检测失败: {}", e), Instant::now())),
+                        Err(e) => {
+                            self.toast = Some((format!("USB 设备检测失败: {}", e), Instant::now()))
+                        }
                     }
                 }
                 AppMsg::SuperProgress(s) => {
@@ -661,7 +674,9 @@ impl App {
                 }
                 AppMsg::Enqueue(r) => match r {
                     Ok(v) => self.enqueue_songs(v),
-                    Err(e) => self.toast = Some((format!("获取歌单曲目失败: {}", e), Instant::now())),
+                    Err(e) => {
+                        self.toast = Some((format!("获取歌单曲目失败: {}", e), Instant::now()))
+                    }
                 },
                 AppMsg::PlayUrl(gen, url, autoplay, proxy) => {
                     if gen == self.play_gen {
@@ -685,7 +700,8 @@ impl App {
                                     .as_ref()
                                     .map(|s| s.name.clone())
                                     .unwrap_or_default();
-                                self.toast = Some((format!("无法获取播放链接: {}", name), Instant::now()));
+                                self.toast =
+                                    Some((format!("无法获取播放链接: {}", name), Instant::now()));
                             }
                         }
                     }
@@ -786,7 +802,11 @@ impl App {
             return None;
         }
         let item_start: u16 = match self.screen {
-            ScreenKind::Menu | ScreenKind::Playlists | ScreenKind::Albums | ScreenKind::SuperDl | ScreenKind::Settings => 2,
+            ScreenKind::Menu
+            | ScreenKind::Playlists
+            | ScreenKind::Albums
+            | ScreenKind::SuperDl
+            | ScreenKind::Settings => 2,
             ScreenKind::Songs | ScreenKind::Library | ScreenKind::Favorites => 3,
             ScreenKind::Search => {
                 if self.search_type == 0 {
@@ -815,11 +835,7 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.ctx_open {
                     if let Some(r) = self.ctx_rect() {
-                        if col >= r.x
-                            && col < r.x + r.width
-                            && row >= r.y
-                            && row < r.y + r.height
-                        {
+                        if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
                             let item = (row.saturating_sub(r.y + 1)) as usize;
                             if item < self.ctx_items().len() {
                                 self.ctx_sel = item;
@@ -843,7 +859,9 @@ impl App {
     }
 
     fn right_click(&mut self, col: u16, row: u16) {
-        let Some(idx) = self.hit_index(row) else { return };
+        let Some(idx) = self.hit_index(row) else {
+            return;
+        };
         self.set_list_sel(idx);
         match self.screen {
             ScreenKind::Search => match self.search_type {
@@ -861,7 +879,9 @@ impl App {
                     self.open_playlist_ctx(self.favorites.playlists().get(idx).cloned(), col, row);
                 }
             }
-            ScreenKind::Playlists => self.open_playlist_ctx(self.playlists.get(idx).cloned(), col, row),
+            ScreenKind::Playlists => {
+                self.open_playlist_ctx(self.playlists.get(idx).cloned(), col, row)
+            }
             ScreenKind::Albums => self.open_album_ctx(self.albums.get(idx).cloned(), col, row),
             _ => {}
         }
@@ -1165,8 +1185,7 @@ impl App {
         }
     }
 
-    const QUALITIES: [&'static str; 5] =
-        ["standard", "higher", "exhigh", "lossless", "hires"];
+    const QUALITIES: [&'static str; 5] = ["standard", "higher", "exhigh", "lossless", "hires"];
 
     fn song_cfg_items(&self) -> Vec<String> {
         let Some(song) = &self.now_playing else {
@@ -1206,7 +1225,11 @@ impl App {
             1 => {
                 let n = self.downloader.enqueue(vec![song]);
                 self.toast = Some((
-                    if n > 0 { "已加入下载队列".to_string() } else { "已在下载队列".to_string() },
+                    if n > 0 {
+                        "已加入下载队列".to_string()
+                    } else {
+                        "已在下载队列".to_string()
+                    },
                     Instant::now(),
                 ));
             }
@@ -1227,7 +1250,10 @@ impl App {
                 self.play_mode = self.play_mode.next();
                 self.settings.play_mode = self.play_mode.as_str().to_string();
                 self.settings.save(&self.cfg.settings_path);
-                self.toast = Some((format!("播放顺序: {}", self.play_mode.label()), Instant::now()));
+                self.toast = Some((
+                    format!("播放顺序: {}", self.play_mode.label()),
+                    Instant::now(),
+                ));
             }
             _ => {}
         }
@@ -1306,7 +1332,12 @@ impl App {
 
     /// S 键：在已注册的源之间循环；换了源就按当前关键词重搜
     fn cycle_source(&mut self) {
-        let ids: Vec<String> = self.registry.all().iter().map(|s| s.id().to_string()).collect();
+        let ids: Vec<String> = self
+            .registry
+            .all()
+            .iter()
+            .map(|s| s.id().to_string())
+            .collect();
         if ids.is_empty() {
             return;
         }
@@ -1323,11 +1354,7 @@ impl App {
         self.selected.clear();
         let (name, avail) = self.current_source();
         self.toast = Some((
-            format!(
-                "音乐源: {}{}",
-                name,
-                if avail { "" } else { "（不可用）" }
-            ),
+            format!("音乐源: {}{}", name, if avail { "" } else { "（不可用）" }),
             Instant::now(),
         ));
         let q = self.search_input.trim().to_string();
@@ -1507,11 +1534,9 @@ impl App {
         self.lib_loading = true;
         let api = self.api.clone();
         let tx = self.tx.clone();
-        spawn(tx, move || {
-            match api.album(id) {
-                Ok((name, songs)) => AppMsg::AlbumDetail(Ok((name, songs))),
-                Err(e) => AppMsg::AlbumDetail(Err(e.to_string())),
-            }
+        spawn(tx, move || match api.album(id) {
+            Ok((name, songs)) => AppMsg::AlbumDetail(Ok((name, songs))),
+            Err(e) => AppMsg::AlbumDetail(Err(e.to_string())),
         });
     }
 
@@ -1568,7 +1593,9 @@ impl App {
         let track = crate::source::track_of(&song);
         // YouTube 的直链绑出口 IP：mpv 必须和 yt-dlp 走同一代理；其它源一律直连
         let mpv_proxy = if source == "youtube" {
-            crate::proxy::mpv_proxy(self.cfg.proxy.as_deref()).ok().flatten()
+            crate::proxy::mpv_proxy(self.cfg.proxy.as_deref())
+                .ok()
+                .flatten()
         } else {
             None
         };
@@ -1790,7 +1817,8 @@ impl App {
             }
             ScreenKind::Playlists => {
                 if let Some(pl) = self.playlists.get(self.playlists_sel) {
-                    self.toast = Some((format!("正在获取歌单曲目: {}...", pl.name), Instant::now()));
+                    self.toast =
+                        Some((format!("正在获取歌单曲目: {}...", pl.name), Instant::now()));
                     let api = self.api.clone();
                     let tx = self.tx.clone();
                     let id = pl.id;

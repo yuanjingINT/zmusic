@@ -120,7 +120,9 @@ fn socks5_connect(socks: &str, host: &str, port: u16) -> Result<TcpStream> {
     let (phost, pport) = addr
         .rsplit_once(':')
         .ok_or_else(|| anyhow!("SOCKS 地址格式不对: {}", socks))?;
-    let pport: u16 = pport.parse().map_err(|_| anyhow!("SOCKS 端口不对: {}", socks))?;
+    let pport: u16 = pport
+        .parse()
+        .map_err(|_| anyhow!("SOCKS 端口不对: {}", socks))?;
     let sock_addr = (phost, pport)
         .to_socket_addrs()?
         .next()

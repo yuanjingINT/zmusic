@@ -1,7 +1,7 @@
 use crate::models::*;
 use crate::source::{SearchKind, TrackId};
-use anyhow::anyhow;
 use crate::util;
+use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
@@ -22,7 +22,11 @@ impl NetEaseSource {
         NetEaseSource { base, http }
     }
 
-    fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str, params: &[(&str, &str)]) -> Result<T> {
+    fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+    ) -> Result<T> {
         let url = format!("{}/{}", self.base, path);
         let resp = self
             .http
@@ -75,15 +79,14 @@ impl NetEaseSource {
     }
 
     pub fn personalized(&self, limit: i32) -> Result<Vec<Playlist>> {
-        let r: PersonalizedResp = self.get_json("personalized", &[("limit", &limit.to_string())])?;
+        let r: PersonalizedResp =
+            self.get_json("personalized", &[("limit", &limit.to_string())])?;
         Ok(r.result)
     }
 
     pub fn personalized_newsong(&self, limit: i32) -> Result<Vec<Song>> {
-        let r: NewsongResp = self.get_json(
-            "personalized/newsong",
-            &[("limit", &limit.to_string())],
-        )?;
+        let r: NewsongResp =
+            self.get_json("personalized/newsong", &[("limit", &limit.to_string())])?;
         let mut songs: Vec<Song> = r
             .result
             .unwrap_or_default()
@@ -146,7 +149,11 @@ impl NetEaseSource {
 
     pub fn album(&self, id: i64) -> Result<(String, Vec<Song>)> {
         let r: AlbumResp = self.get_json("album", &[("id", &id.to_string())])?;
-        let name = r.album.as_ref().map(|a| a.name.clone()).unwrap_or_else(|| "专辑".to_string());
+        let name = r
+            .album
+            .as_ref()
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| "专辑".to_string());
         let mut songs = r.songs;
         tag(&mut songs);
         Ok((name, songs))

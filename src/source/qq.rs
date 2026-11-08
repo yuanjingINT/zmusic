@@ -192,7 +192,10 @@ mod tests {
         let v = json!({"req_0":{"data":{"sip":["http://x/"],"midurlinfo":[{"purl":""}]}}});
         assert_eq!(parse_vkey(&v), None);
         let ok = json!({"req_0":{"data":{"sip":["http://x/"],"midurlinfo":[{"purl":"C400abc.m4a?vkey=1"}]}}});
-        assert_eq!(parse_vkey(&ok).as_deref(), Some("http://x/C400abc.m4a?vkey=1"));
+        assert_eq!(
+            parse_vkey(&ok).as_deref(),
+            Some("http://x/C400abc.m4a?vkey=1")
+        );
     }
 
     #[test]

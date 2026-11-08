@@ -39,7 +39,10 @@ pub fn parse_search(v: &Value, source: &'static str) -> Vec<Song> {
     };
     arr.iter()
         .filter_map(|s| {
-            let id = s.get("id")?.as_str().or_else(|| s.get("url_id")?.as_str())?;
+            let id = s
+                .get("id")?
+                .as_str()
+                .or_else(|| s.get("url_id")?.as_str())?;
             if id.is_empty() {
                 return None;
             }

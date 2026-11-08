@@ -5,11 +5,15 @@ pub fn primary() -> Style {
 }
 
 pub fn title() -> Style {
-    Style::new().fg(Color::LightBlue).add_modifier(Modifier::BOLD)
+    Style::new()
+        .fg(Color::LightBlue)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn highlight() -> Style {
-    Style::new().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+    Style::new()
+        .bg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn dim() -> Style {
@@ -37,7 +41,5 @@ pub fn lyric_normal() -> Style {
 }
 
 pub fn song_title() -> Style {
-    Style::new()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD)
+    Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
 }

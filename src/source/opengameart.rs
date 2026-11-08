@@ -108,9 +108,7 @@ impl Source for OpenGameArtSource {
             if parse_audio_link(&page).is_none() {
                 continue;
             }
-            let name = path
-                .trim_start_matches("/content/")
-                .replace('-', " ");
+            let name = path.trim_start_matches("/content/").replace('-', " ");
             songs.push(Song {
                 id: 0,
                 name,

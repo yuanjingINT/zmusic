@@ -152,7 +152,9 @@ impl Source for CcMixterSource {
         // ccMixter 的 download_url 对非浏览器直链返回 403（实测），所以这里只认搜索到的直链，
         // 播放路径交给上层显示「无法获取播放链接」；不再假装能出流。
         let _ = stream_of(&v);
-        Err(anyhow!("ccMixter 禁止第三方直链下载（HTTP 403），暂不支持播放"))
+        Err(anyhow!(
+            "ccMixter 禁止第三方直链下载（HTTP 403），暂不支持播放"
+        ))
     }
 }
 

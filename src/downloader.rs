@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -139,9 +139,21 @@ impl Downloader {
     pub fn counts(&self) -> (usize, usize, usize, usize) {
         let st = self.shared.lock().unwrap();
         let total = st.tasks.len();
-        let done = st.tasks.iter().filter(|t| matches!(t.status, DlStatus::Done)).count();
-        let skipped = st.tasks.iter().filter(|t| matches!(t.status, DlStatus::Skipped)).count();
-        let failed = st.tasks.iter().filter(|t| matches!(t.status, DlStatus::Failed(_))).count();
+        let done = st
+            .tasks
+            .iter()
+            .filter(|t| matches!(t.status, DlStatus::Done))
+            .count();
+        let skipped = st
+            .tasks
+            .iter()
+            .filter(|t| matches!(t.status, DlStatus::Skipped))
+            .count();
+        let failed = st
+            .tasks
+            .iter()
+            .filter(|t| matches!(t.status, DlStatus::Failed(_)))
+            .count();
         (total, done, skipped, failed)
     }
 }
@@ -214,7 +226,12 @@ fn process(
     }
 }
 
-fn resolve_url(client: &reqwest::blocking::Client, base: &str, id: i64, level: &str) -> Result<Option<String>> {
+fn resolve_url(
+    client: &reqwest::blocking::Client,
+    base: &str,
+    id: i64,
+    level: &str,
+) -> Result<Option<String>> {
     let r = client
         .get(format!("{}/song/url/v1", base))
         .query(&[("id", id.to_string()), ("level", level.to_string())])
@@ -236,7 +253,10 @@ fn download_to(
 ) -> Result<()> {
     let mut resp = client.get(url).send()?;
     let total = resp.content_length().unwrap_or(0).max(1);
-    let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let tmp = path.with_extension(format!("{}.part", ext));
     let mut f = File::create(&tmp)?;
     let mut buf = vec![0u8; 128 * 1024];
@@ -248,7 +268,11 @@ fn download_to(
         }
         f.write_all(&buf[..n])?;
         read += n as u64;
-        set_status(shared, id, DlStatus::Downloading(read as f64 / total as f64 * 100.0));
+        set_status(
+            shared,
+            id,
+            DlStatus::Downloading(read as f64 / total as f64 * 100.0),
+        );
     }
     drop(f);
     std::fs::rename(&tmp, path)?;
@@ -290,7 +314,10 @@ mod tests {
                             .unwrap()
                             .push(rest.split('&').next().unwrap_or("").to_string());
                     }
-                    format!("{{\"data\":[{{\"url\":\"{}/audio.mp3\"}}]}}", base_for_thread)
+                    format!(
+                        "{{\"data\":[{{\"url\":\"{}/audio.mp3\"}}]}}",
+                        base_for_thread
+                    )
                 } else {
                     "ID3fake-audio-bytes".to_string()
                 };
@@ -347,6 +374,10 @@ mod tests {
 
         let got = levels.lock().unwrap().clone();
         assert_eq!(got.first().map(String::as_str), Some("exhigh"));
-        assert_eq!(got.last().map(String::as_str), Some("hires"), "改音质后下载请求应跟着变");
+        assert_eq!(
+            got.last().map(String::as_str),
+            Some("hires"),
+            "改音质后下载请求应跟着变"
+        );
     }
 }

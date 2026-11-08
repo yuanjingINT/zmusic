@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-use crate::source::netease::NetEaseSource;
 use crate::models::Song;
+use crate::source::netease::NetEaseSource;
 use crate::ui::AppMsg;
 use crate::util;
 use std::collections::HashSet;
@@ -27,7 +27,12 @@ impl UsbDevice {
 
 pub fn detect_usb() -> anyhow::Result<Vec<UsbDevice>> {
     let out = Command::new("lsblk")
-        .args(["-J", "-b", "-o", "NAME,PATH,TYPE,TRAN,SIZE,MODEL,MOUNTPOINT,FSTYPE,RM"])
+        .args([
+            "-J",
+            "-b",
+            "-o",
+            "NAME,PATH,TYPE,TRAN,SIZE,MODEL,MOUNTPOINT,FSTYPE,RM",
+        ])
         .output()?;
     if !out.status.success() {
         anyhow::bail!("lsblk 执行失败");
@@ -49,22 +54,46 @@ pub fn detect_usb() -> anyhow::Result<Vec<UsbDevice>> {
         if !is_usb || disk.get("type").and_then(|t| t.as_str()) != Some("disk") {
             continue;
         }
-        let path = disk.get("path").and_then(|p| p.as_str()).unwrap_or("").to_string();
+        let path = disk
+            .get("path")
+            .and_then(|p| p.as_str())
+            .unwrap_or("")
+            .to_string();
         if path.is_empty() {
             continue;
         }
         let size = disk.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
-        let model = disk.get("model").and_then(|m| m.as_str()).unwrap_or("").trim().to_string();
-        let name = disk.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+        let model = disk
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let name = disk
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
         let mut part = None;
         let mut mount = None;
         let mut fs = None;
         if let Some(children) = disk.get("children").and_then(|c| c.as_array()) {
             for ch in children {
                 if ch.get("type").and_then(|t| t.as_str()) == Some("part") {
-                    part = Some(ch.get("path").and_then(|p| p.as_str()).unwrap_or("").to_string());
-                    mount = ch.get("mountpoint").and_then(|m| m.as_str()).map(|s| s.to_string());
-                    fs = ch.get("fstype").and_then(|f| f.as_str()).map(|s| s.to_string());
+                    part = Some(
+                        ch.get("path")
+                            .and_then(|p| p.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    mount = ch
+                        .get("mountpoint")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string());
+                    fs = ch
+                        .get("fstype")
+                        .and_then(|f| f.as_str())
+                        .map(|s| s.to_string());
                     break;
                 }
             }
@@ -97,7 +126,10 @@ fn run(cmd: &str) -> (bool, String) {
 }
 
 fn free_space(dir: &str) -> u64 {
-    if let Ok(out) = Command::new("df").args(["-B1", "--output=avail", dir]).output() {
+    if let Ok(out) = Command::new("df")
+        .args(["-B1", "--output=avail", dir])
+        .output()
+    {
         let s = String::from_utf8_lossy(&out.stdout);
         if let Some(line) = s.lines().nth(1) {
             if let Ok(n) = line.trim().parse::<u64>() {
@@ -253,7 +285,10 @@ pub fn run_super_download<F: Fn(&str) -> (bool, String)>(
     } else {
         "exFAT"
     };
-    log(format!("==> 格式化 {} 为 {} (会切换到终端输入 sudo 密码)...", target, fs));
+    log(format!(
+        "==> 格式化 {} 为 {} (会切换到终端输入 sudo 密码)...",
+        target, fs
+    ));
     let cmd = if fs == "FAT32" {
         format!("sudo mkfs.vfat -F 32 -n ZMUSIC {}", target)
     } else {
@@ -261,7 +296,10 @@ pub fn run_super_download<F: Fn(&str) -> (bool, String)>(
     };
     let (ok, out) = sudo_run(&cmd);
     if !ok {
-        let _ = tx.send(AppMsg::SuperDone(Err(format!("格式化失败: {}", out.trim()))));
+        let _ = tx.send(AppMsg::SuperDone(Err(format!(
+            "格式化失败: {}",
+            out.trim()
+        ))));
         return;
     }
     log("格式化完成".to_string());
@@ -277,4 +315,3 @@ pub fn run_super_download<F: Fn(&str) -> (bool, String)>(
     fill_with_music(&client, &mount, quality, 12, &mut log2);
     let _ = tx.send(AppMsg::SuperDone(Ok("超级下载完成".to_string())));
 }
-

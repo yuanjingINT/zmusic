@@ -56,7 +56,8 @@ impl Player {
     pub fn start() -> Result<Self> {
         let socket = util::mpv_socket();
         let _ = std::fs::remove_file(&socket);
-        let out = std::fs::File::create("/tmp/ncm_mpv.log").map_err(|e| anyhow!("无法创建 mpv 日志: {}", e))?;
+        let out = std::fs::File::create("/tmp/ncm_mpv.log")
+            .map_err(|e| anyhow!("无法创建 mpv 日志: {}", e))?;
         let ipc = format!("--input-ipc-server={}", socket);
         let child = Command::new("mpv")
             .args([
@@ -75,7 +76,8 @@ impl Player {
             .stdin(Stdio::null())
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(
-                std::fs::File::create("/tmp/ncm_mpv_err.log").map_err(|e| anyhow!("无法创建 mpv 日志: {}", e))?,
+                std::fs::File::create("/tmp/ncm_mpv_err.log")
+                    .map_err(|e| anyhow!("无法创建 mpv 日志: {}", e))?,
             ))
             .spawn()
             .map_err(|e| anyhow!("无法启动 mpv: {}", e))?;
@@ -124,7 +126,9 @@ impl Player {
 
     /// 设置 mpv 的 http-proxy；传 None 表示清空（回到直连）
     pub fn set_http_proxy(&self, proxy: Option<&str>) {
-        let _ = self.tx.send(MpvCmd::SetProxy(proxy.unwrap_or("").to_string()));
+        let _ = self
+            .tx
+            .send(MpvCmd::SetProxy(proxy.unwrap_or("").to_string()));
     }
 
     pub fn seek_abs(&self, s: f64) {
@@ -175,7 +179,8 @@ fn ipc_loop(mut stream: UnixStream, rx: Receiver<MpvCmd>, state: Arc<Mutex<MpvSt
                         let _ = send_cmd(&mut stream, &["set_property", "pause", "no"], &mut rid);
                     }
                     MpvCmd::SetProxy(p) => {
-                        let _ = send_cmd(&mut stream, &["set_property", "http-proxy", &p], &mut rid);
+                        let _ =
+                            send_cmd(&mut stream, &["set_property", "http-proxy", &p], &mut rid);
                     }
                     MpvCmd::Pause(b) => {
                         let _ = send_cmd(
@@ -202,11 +207,8 @@ fn ipc_loop(mut stream: UnixStream, rx: Receiver<MpvCmd>, state: Arc<Mutex<MpvSt
                         );
                     }
                     MpvCmd::Volume(d) => {
-                        let _ = send_cmd(
-                            &mut stream,
-                            &["add", "volume", &format!("{}", d)],
-                            &mut rid,
-                        );
+                        let _ =
+                            send_cmd(&mut stream, &["add", "volume", &format!("{}", d)], &mut rid);
                     }
                 },
                 Err(TryRecvError::Empty) => break,

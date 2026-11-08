@@ -35,7 +35,10 @@ pub fn parse_tracks(v: &Value) -> Vec<Song> {
             arr.iter()
                 .filter_map(|t| {
                     let id = t.get("id")?.as_str()?;
-                    let title = t.get("title").and_then(|x| x.as_str()).unwrap_or("(无标题)");
+                    let title = t
+                        .get("title")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("(无标题)");
                     let artist = t
                         .get("user")
                         .and_then(|u| u.get("name"))
@@ -150,7 +153,10 @@ mod tests {
     #[test]
     fn stream_url_points_at_api() {
         let s = AudiusSource::new();
-        let u = s.stream_url(&TrackId::from("6RN8l"), "exhigh").unwrap().unwrap();
+        let u = s
+            .stream_url(&TrackId::from("6RN8l"), "exhigh")
+            .unwrap()
+            .unwrap();
         assert!(u.contains("/v1/tracks/6RN8l/stream"), "{u}");
     }
 

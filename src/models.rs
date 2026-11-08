@@ -16,7 +16,6 @@ pub struct Album {
     pub pic_url: Option<String>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 #[derive(Default)]
@@ -33,7 +32,6 @@ pub struct Song {
     pub s_id: String,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 #[derive(Default)]
@@ -45,7 +43,6 @@ pub struct Playlist {
     pub cover_img_url: Option<String>,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 #[derive(Default)]
@@ -55,7 +52,6 @@ pub struct PlaylistDetail {
     pub track_count: i32,
     pub cover_img_url: Option<String>,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchResp {
@@ -82,7 +78,6 @@ pub struct ArtistInfo {
     pub album_size: i32,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArtistSongsResp {
     pub songs: Vec<Song>,
@@ -101,7 +96,6 @@ pub struct Toplist {
     pub id: i64,
     pub name: String,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PersonalizedResp {
@@ -152,7 +146,6 @@ pub struct SongUrl {
     pub size: Option<i64>,
 }
 
-
 #[derive(Debug, Clone, Default)]
 pub struct Lyrics {
     pub lines: Vec<(u64, String)>,
@@ -168,7 +161,6 @@ pub struct NewsongItem {
     pub song: Option<RawSong>,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 #[derive(Default)]
@@ -181,7 +173,6 @@ pub struct RawSong {
     pub fee: i32,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 #[derive(Default)]
@@ -190,7 +181,6 @@ pub struct RawAlbum {
     pub name: String,
     pub pic_url: Option<String>,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NewsongResp {
@@ -213,4 +203,3 @@ pub struct RecAlbum {
     pub pic_url: Option<String>,
     pub publish_time: Option<i64>,
 }
-
