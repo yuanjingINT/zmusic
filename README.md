@@ -109,6 +109,12 @@ sudo apt install build-essential pkg-config libssl-dev
 ./setup.sh update   # 更新 API 到最新版并重启
 ```
 
+> 如果 zmusic 是用 pacman 包安装的，`setup.sh` 会检测到侧车由包提供
+> （`pacman -Qo /usr/lib/zmusic/sidecar/meting.js` 成立）并**跳过源码侧车安装**：
+> 不再往 `~/.local/share/zmusic/meting` 复制旧副本，也不写用户级 unit（用户级 unit 会遮蔽
+> 包里的 `meting-sidecar.service`，导致跑旧代码、缺 `type=duration`）。发现遗留的用户级 unit
+> 时只提示怎么备份和重启，不替你删。
+
 `install.sh` 生成的启动器（`~/.local/bin/zmusic` → 仓库里的 `run.sh`）**不会联网更新**：
 它只做三件事——二进制比源码旧时增量 `cargo build --release`、`ncm-api` 没跑时
 `systemctl --user start ncm-api`、然后 `exec target/release/zmusic`。所以菜单是秒开的。

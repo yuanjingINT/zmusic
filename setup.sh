@@ -174,10 +174,34 @@ wait_ready() {
 
 METING_DIR="$HOME/.local/share/zmusic/meting"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)/sidecar"
+PKG_SIDECAR_DIR="${PKG_SIDECAR_DIR:-/usr/lib/zmusic/sidecar}"
+USER_UNIT="$HOME/.config/systemd/user/meting-sidecar.service"
+
+# 侧车是不是由 pacman 包提供（包里的更新，绝不能被源码副本盖住）
+pkg_sidecar_installed() {
+    [ -f "$PKG_SIDECAR_DIR/meting.js" ] &&
+        pacman -Qo "$PKG_SIDECAR_DIR/meting.js" >/dev/null 2>&1
+}
 
 install_meting() {
     # Meting 侧车：覆盖腾讯/酷狗/百度/酷我。没起或装不上时，zmusic 里那组源自动置灰。
     command -v node >/dev/null || { echo "!! 没有 node，跳过 Meting 侧车"; return 0; }
+
+    if pkg_sidecar_installed; then
+        # 已经用包安装了：不要复制源码侧车、也不要写用户级 unit（会遮蔽包内 unit）
+        echo "==> Meting 侧车由软件包提供（$PKG_SIDECAR_DIR），跳过源码安装"
+        if [ -f "$USER_UNIT" ]; then
+            echo "!! 发现旧用户级 unit：$USER_UNIT"
+            echo "   它会遮蔽包内 unit，跑的是旧的 ~/.local/share/zmusic/meting（没有 type=duration）。"
+            echo "   建议处理："
+            echo "     mv \"$USER_UNIT\" \"$USER_UNIT.bak-$(date +%Y%m%d)\""
+            echo "     systemctl --user daemon-reload && systemctl --user restart meting-sidecar"
+        fi
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        systemctl --user enable --now meting-sidecar.service >/dev/null 2>&1 || true
+        return 0
+    fi
+
     if [ ! -f "$METING_DIR/node_modules/@meting/core/package.json" ]; then
         echo "==> 安装 Meting 侧车"
         mkdir -p "$METING_DIR"
@@ -185,7 +209,7 @@ install_meting() {
         ( cd "$METING_DIR" && npm i --no-audit --no-fund ) || { echo "!! Meting 侧车安装失败，跳过"; return 0; }
     fi
     mkdir -p "$HOME/.config/systemd/user"
-    cat > "$HOME/.config/systemd/user/meting-sidecar.service" <<UNIT
+    cat > "$USER_UNIT" <<UNIT
 [Unit]
 Description=Meting sidecar for zmusic (loopback only)
 After=network-online.target
@@ -194,7 +218,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$METING_DIR
-Environment=PORT=8123
+Environment=METING_PORT=8123
 ExecStart=$(command -v node) meting.js
 Restart=on-failure
 RestartSec=3
