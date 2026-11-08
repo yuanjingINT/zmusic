@@ -1,6 +1,6 @@
 # Maintainer: yuanjing <yuanjing@yuanjing.art>
 pkgname=zmusic
-pkgver=0.1.1beta4
+pkgver=0.1.1beta5
 pkgrel=1
 pkgdesc="网易云音乐终端播放器（Rust / ratatui TUI，beta）"
 arch=('x86_64' 'aarch64')
@@ -16,9 +16,9 @@ optdepends=('mpv: 音频播放'
 # 发版时把 _commit 换成要发的那一版，并重算 sha256sums：
 #   curl -sSfL "$url/-/archive/$_commit/$pkgname-$_commit.tar.gz" | sha256sum
 # 之后公开了 tag，也可以换成 tag 归档：$_commit 的位置写 v$pkgver。
-_commit=466612bc215787d6c014fbb0d586591dc6eef35c
+_commit=6d3d65751a7ba47a821833e7b90709fb3f3b6c41
 source=("$pkgname-$_commit.tar.gz::$url/-/archive/$_commit/$pkgname-$_commit.tar.gz")
-sha256sums=('5a7945feffdb31d7507390628ccec0e996d06e95bc1236b738d4dac84d6a2464')
+sha256sums=('4b8d49217479ae4e79c36475a8584fff65e5666dbceb8972245673442e6d5659')
 
 build() {
   cd "$srcdir/$pkgname-$_commit"
