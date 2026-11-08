@@ -251,8 +251,13 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
         Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
             .areas(area);
     f.render_widget(Paragraph::new(line1), r1);
-    f.render_widget(gauge, r2);
-    f.render_widget(Paragraph::new(hints), r3);
+    // 正在播放页自己有一条带时间/总长的进度条，底栏再画一条就重复了
+    if app.screen == crate::ui::ScreenKind::NowPlaying {
+        f.render_widget(Paragraph::new(hints), r2);
+    } else {
+        f.render_widget(gauge, r2);
+        f.render_widget(Paragraph::new(hints), r3);
+    }
 }
 
 fn render_center(f: &mut Frame, area: Rect, text: &str) {
