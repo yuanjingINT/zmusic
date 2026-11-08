@@ -205,15 +205,11 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
     } else {
         String::new()
     };
-    let screen_hint = if app.screen == crate::ui::ScreenKind::Search {
-        " Tab切输入/列表 F1-F4换类型"
-    } else {
-        ""
-    };
     let hints = Line::from(Span::styled(
         format!(
-            " h菜单 s搜索 v歌词 Alt+Enter选择 d下载(选中) l收藏 x移除收藏 Esc返回 n/p切歌 空格暂停 q退出{}{}",
-            screen_hint, sel_hint
+            " {} {}",
+            crate::ui::hints::hints(app.screen, app.search_input_focus),
+            sel_hint
         ),
         theme::dim(),
     ));

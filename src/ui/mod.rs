@@ -1,4 +1,5 @@
 pub mod screens;
+mod hints;
 mod nav;
 mod search_keys;
 mod theme;
