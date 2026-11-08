@@ -161,13 +161,6 @@ fn collect_hot_songs(client: &NetEaseSource, max_toplists: usize) -> Vec<Song> {
     all
 }
 
-fn download_to(client: &reqwest::blocking::Client, url: &str, path: &Path) -> anyhow::Result<u64> {
-    let mut resp = client.get(url).send()?;
-    let mut f = std::fs::File::create(path)?;
-    let n = std::io::copy(&mut resp, &mut f)?;
-    Ok(n)
-}
-
 pub fn fill_with_music(
     client: &NetEaseSource,
     dir: &str,
@@ -177,7 +170,7 @@ pub fn fill_with_music(
 ) {
     let songs = collect_hot_songs(client, max_toplists);
     log(format!("获取到 {} 首热榜歌曲", songs.len()));
-    let http = reqwest::blocking::Client::new();
+    let http = crate::source::http::client();
     let mut done: usize = 0;
     let mut skipped: usize = 0;
     let min_free: u64 = 200 * 1024 * 1024;
@@ -188,7 +181,10 @@ pub fn fill_with_music(
             break;
         }
         let url = match client.song_url_v1(&[song.id], quality) {
-            Ok(u) => u.into_iter().next().and_then(|x| x.url),
+            Ok(u) => u
+                .into_iter()
+                .next()
+                .and_then(crate::source::netease::accept_stream),
             Err(_) => None,
         };
         let Some(url) = url else {
@@ -211,7 +207,7 @@ pub fn fill_with_music(
             skipped += 1;
             continue;
         }
-        match download_to(&http, &url, &path) {
+        match crate::downloader::download_to(http, &url, &path, |_, _| {}) {
             Ok(n) => {
                 done += 1;
                 log(format!(
@@ -314,4 +310,78 @@ pub fn run_super_download<F: Fn(&str) -> (bool, String)>(
     };
     fill_with_music(&client, &mount, quality, 12, &mut log2);
     let _ = tx.send(AppMsg::SuperDone(Ok("超级下载完成".to_string())));
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// 极简桩：/toplist、/playlist/track/all、/song/url/v1、/audio
+    fn stub_api() -> u16 {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in l.incoming() {
+                let mut s = match s {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let (ctype, body): (&str, Vec<u8>) = if path.starts_with("/toplist") {
+                    (
+                        "application/json",
+                        br#"{"list":[{"id":1,"name":"t"}]}"#.to_vec(),
+                    )
+                } else if path.starts_with("/playlist/track/all") {
+                    (
+                        "application/json",
+                        "{\"code\":200,\"songs\":[{\"id\":11,\"name\":\"测\",\"ar\":[{\"id\":1,\"name\":\"人\"}],\"al\":{\"id\":1,\"name\":\"专\"},\"dt\":180000,\"fee\":0}]}".as_bytes().to_vec(),
+                    )
+                } else if path.starts_with("/song/url/v1") {
+                    (
+                        "application/json",
+                        format!(
+                            r#"{{"data":[{{"id":11,"url":"http://127.0.0.1:{port}/audio.mp3","code":200,"br":320000,"size":19,"fee":0}}]}}"#
+                        )
+                        .into_bytes(),
+                    )
+                } else {
+                    ("audio/mpeg", b"ID3fake-audio-bytes".to_vec())
+                };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(head.as_bytes());
+                let _ = s.write_all(&body);
+            }
+        });
+        port
+    }
+
+    /// 超级下载走的是 downloader 的共用 download_to：真下文件并逐字节比对
+    #[test]
+    fn super_download_lands_exact_bytes() {
+        let port = stub_api();
+        let src = crate::source::netease::NetEaseSource::new(format!("http://127.0.0.1:{port}"));
+        let dir = std::env::temp_dir().join(format!("zm-superdl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut logs: Vec<String> = Vec::new();
+        fill_with_music(&src, dir.to_str().unwrap(), "exhigh", 1, &mut |l| {
+            logs.push(l)
+        });
+        let got = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.path().extension().map(|x| x == "mp3").unwrap_or(false))
+            .expect("超级下载应该落一个 mp3");
+        assert_eq!(std::fs::read(got.path()).unwrap(), b"ID3fake-audio-bytes");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

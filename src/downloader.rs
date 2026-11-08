@@ -217,8 +217,14 @@ fn process(
         return;
     }
     set_status(shared, song.id, DlStatus::Downloading(0.0));
-    match download_to(client, &url, &path, song.id, shared) {
-        Ok(()) => set_status(shared, song.id, DlStatus::Done),
+    match download_to(client, &url, &path, |read, total| {
+        set_status(
+            shared,
+            song.id,
+            DlStatus::Downloading(read as f64 / total as f64 * 100.0),
+        )
+    }) {
+        Ok(_) => set_status(shared, song.id, DlStatus::Done),
         Err(e) => set_status(shared, song.id, DlStatus::Failed(e.to_string())),
     }
 }
@@ -241,13 +247,14 @@ fn resolve_url(
     Ok(url)
 }
 
-fn download_to(
+/// 所有下载路径共用的落盘实现：128KB 分块、先写 `.part` 再 rename。
+/// 普通下载按块报进度，超级下载不关心进度（传 noop）。
+pub(crate) fn download_to(
     client: &reqwest::blocking::Client,
     url: &str,
     path: &std::path::Path,
-    id: i64,
-    shared: &Arc<Mutex<DownloadState>>,
-) -> Result<()> {
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<u64> {
     let mut resp = client.get(url).send()?;
     let total = resp.content_length().unwrap_or(0).max(1);
     let ext = path
@@ -265,15 +272,11 @@ fn download_to(
         }
         f.write_all(&buf[..n])?;
         read += n as u64;
-        set_status(
-            shared,
-            id,
-            DlStatus::Downloading(read as f64 / total as f64 * 100.0),
-        );
+        on_progress(read, total);
     }
     drop(f);
     std::fs::rename(&tmp, path)?;
-    Ok(())
+    Ok(read)
 }
 
 #[cfg(test)]
