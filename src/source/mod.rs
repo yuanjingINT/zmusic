@@ -13,7 +13,7 @@ pub mod netease;
 pub mod opengameart;
 pub mod qq;
 pub mod wikimedia;
-pub mod youtube;
+pub mod ytdlp;
 
 use crate::models::{Lyrics, SearchResult};
 use anyhow::{anyhow, Result};
@@ -163,11 +163,14 @@ impl SourceRegistry {
             )));
         }
         // 国际
-        let yt = match proxy {
-            Some(p) => youtube::YouTubeSource::with_proxy("yt-dlp", Some(p)),
-            None => youtube::YouTubeSource::new(),
-        };
-        reg.register(Arc::new(yt));
+        // 走 yt-dlp 的一组站点（同一套逻辑按 Site 参数化）
+        for site in [ytdlp::Site::YouTube, ytdlp::Site::SoundCloud] {
+            let src = match &proxy {
+                Some(p) => ytdlp::YtDlpSource::with_proxy(site, "yt-dlp", Some(p.clone())),
+                None => ytdlp::YtDlpSource::new(site),
+            };
+            reg.register(Arc::new(src));
+        }
         // 公开免费
         reg.register(Arc::new(audius::AudiusSource::new()));
         reg.register(Arc::new(ccmixter::CcMixterSource::new()));
@@ -210,12 +213,7 @@ impl SourceRegistry {
     }
 
     /// 按 source 标识取流；未知源给明确错误，别让上层拿到 None 猜
-    pub fn stream_url(
-        &self,
-        source: &str,
-        id: &TrackId,
-        quality: &str,
-    ) -> Result<Option<String>> {
+    pub fn stream_url(&self, source: &str, id: &TrackId, quality: &str) -> Result<Option<String>> {
         match self.get(source) {
             Some(s) => s.stream_url(id, quality),
             None => Err(anyhow!("未知音乐源: {}（没有对应的 adapter）", source)),
@@ -230,18 +228,28 @@ mod tests {
 
     #[test]
     fn netease_registered_by_default() {
-        let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None, "http://127.0.0.1:8123".to_string());
+        let reg = SourceRegistry::with_defaults(
+            "http://127.0.0.1:3000".to_string(),
+            None,
+            "http://127.0.0.1:8123".to_string(),
+        );
         assert!(reg.len() >= 2);
         let s = reg.get("netease").expect("默认应注册网易云");
         assert_eq!(s.id(), "netease");
         assert_eq!(s.name(), "网易云音乐");
         assert!(reg.get("youtube").is_some(), "YouTube 也应默认注册");
+        assert!(reg.get("soundcloud").is_some(), "SoundCloud 应默认注册");
+        assert!(reg.get("bandcamp").is_none(), "Bandcamp 无搜索入口，不注册");
         assert!(reg.get("spotify").is_none());
     }
 
     #[test]
     fn duplicate_register_is_ignored() {
-        let mut reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None, "http://127.0.0.1:8123".to_string());
+        let mut reg = SourceRegistry::with_defaults(
+            "http://127.0.0.1:3000".to_string(),
+            None,
+            "http://127.0.0.1:8123".to_string(),
+        );
         reg.register(Arc::new(netease::NetEaseSource::new(
             "http://127.0.0.1:3000".to_string(),
         )));
@@ -250,7 +258,11 @@ mod tests {
 
     #[test]
     fn unknown_source_stream_url_errors_clearly() {
-        let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None, "http://127.0.0.1:8123".to_string());
+        let reg = SourceRegistry::with_defaults(
+            "http://127.0.0.1:3000".to_string(),
+            None,
+            "http://127.0.0.1:8123".to_string(),
+        );
         let err = reg
             .stream_url("spotify", &TrackId::from("dQw4w9WgXcQ"), "exhigh")
             .expect_err("未知源必须报错");
@@ -280,8 +292,10 @@ mod tests {
 
     #[test]
     fn track_id_falls_back_to_numeric_id() {
-        let mut song = Song::default();
-        song.id = 42;
+        let mut song = Song {
+            id: 42,
+            ..Default::default()
+        };
         assert_eq!(track_of(&song).as_str(), "42");
         song.s_id = "dQw4w9WgXcQ".to_string();
         assert_eq!(track_of(&song).as_str(), "dQw4w9WgXcQ");

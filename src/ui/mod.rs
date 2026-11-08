@@ -680,7 +680,7 @@ impl App {
                 },
                 AppMsg::PlayUrl(gen, url, autoplay, proxy) => {
                     if gen == self.play_gen {
-                        // mpv 的 http-proxy 按曲目切：YouTube 走代理，网易云清空
+                        // mpv 的 http-proxy 按曲目切：yt-dlp 系源走代理，其他源清空
                         self.player.set_http_proxy(proxy.as_deref());
                         match url {
                             Some(u) => {
@@ -1591,8 +1591,8 @@ impl App {
             song.source.clone()
         };
         let track = crate::source::track_of(&song);
-        // YouTube 的直链绑出口 IP：mpv 必须和 yt-dlp 走同一代理；其它源一律直连
-        let mpv_proxy = if source == "youtube" {
+        // 走 yt-dlp 的源（YouTube/SoundCloud）直链绑出口：mpv 必须和 yt-dlp 同一代理
+        let mpv_proxy = if crate::source::ytdlp::YtDlpSource::needs_proxy_for(&source) {
             crate::proxy::mpv_proxy(self.cfg.proxy.as_deref())
                 .ok()
                 .flatten()

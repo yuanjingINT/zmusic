@@ -120,7 +120,7 @@ sudo apt install build-essential pkg-config libssl-dev
 | `NCM_API` | `http://127.0.0.1:3000` | 网易云 API 地址 |
 | `NCM_DIR` | `~/Music/ncm` | 下载目录 |
 | `NCM_QUALITY` | `exhigh` | 音质：`standard` / `higher` / `exhigh` / `lossless` / `hires` |
-| `ZMUSIC_PROXY` | 空 | 可选代理，如 `socks5h://127.0.0.1:11080`；YouTube 源必需，见下 |
+| `ZMUSIC_PROXY` | 空 | 可选代理，如 `socks5h://127.0.0.1:11080`；YouTube / SoundCloud 必需，见下 |
 | `ZMUSIC_METING_URL` | `http://127.0.0.1:8123` | Meting 侧车地址（腾讯/酷狗/百度/酷我） |
 
 运行时会写：
@@ -130,9 +130,37 @@ sudo apt install build-essential pkg-config libssl-dev
 ~/.config/zmusic/settings.json    界面与播放设置
 ```
 
-### YouTube 源与代理
+### 音乐源一览
 
-`S` 键在搜索页切换音乐源（网易云 / YouTube）。YouTube 走 `yt-dlp`，**国内直连不通，需要代理**：
+`S` 键在搜索页按「国内 → 国际 → 公开免费」分组循环，选择记在 `settings.json` 里，默认仍是网易云。
+每个源的能力（支持哪些搜索类型、有没有歌词、可不可播放）由 `Source::capabilities()` 给出，
+UI 据此禁用不支持的项，不靠猜。
+
+| 源 | `Song.source` | 组 | 状态 |
+|----|---------------|----|------|
+| 网易云 | `netease` | 国内 | 默认源，搜索/播放/歌词全通 |
+| QQ 音乐（直连） | `qq` | 国内 | 免费曲目可出流；会员曲返回「不可播放」 |
+| QQ / 酷狗 / 千千 / 酷我（Meting） | `meting:tencent` `meting:kugou` `meting:baidu` `meting:kuwo` | 国内 | 走侧车；tencent/kugou 能搜、取流需 cookie；baidu/kuwo 上游返回空壳 |
+| YouTube | `youtube` | 国际 | `yt-dlp`，国内需代理 |
+| SoundCloud | `soundcloud` | 国际 | `yt-dlp`，国内需代理；搜索较慢（6–7s） |
+| Audius | `audius` | 公开免费 | 搜索 + 取流可用 |
+| ccMixter | `ccmixter` | 公开免费 | 搜索可用；音乐直链被站点 403，运行期尝试后降级「不可播放」 |
+| Wikimedia Commons | `wikimedia` | 公开免费 | 只解析 IPv6，网络慢时降级 |
+| Jamendo | `jamendo` | 公开免费 | 需要 `ZMUSIC_JAMENDO_CLIENT_ID`，没配就置灰 |
+| OpenGameArt | `opengameart` | 公开免费 | 抓页面，只出单曲 |
+
+没接入的（和原因，都是实测过的）：
+
+| 源 | 原因 |
+|----|------|
+| Bandcamp | `yt-dlp` 没有 Bandcamp 的搜索前缀，只能抓网页；而 `bandcamp.com` 本机直连被重置，经海外出口拿到的是 3038 字节的 `Client Challenge` 反爬页（没有 `tralbum` 数据），`yt-dlp -g` 报 `Unable to extract tralbum data` |
+| Free Music Archive | 老 API 404，新接口要 key |
+| Spotify / Tidal / Qobuz / Apple Music | 官方 API 只给元数据与 30s 试听，`stream_url` 只能返回 `None`，等有账号 token 再谈 |
+
+### yt-dlp 源（YouTube / SoundCloud）与代理
+
+YouTube 和 SoundCloud 共用一个 adapter（`src/source/ytdlp.rs`，按 `Site` 参数化），都走 `yt-dlp` 子进程。
+**国内直连都不通，需要代理**：
 
 ```bash
 # 例：借一台海外机器开 SOCKS5
@@ -146,10 +174,17 @@ ZMUSIC_PROXY=socks5h://127.0.0.1:11080 zmusic
 - `yt-dlp` 侧直接收 `--proxy`
 - mpv 的 `--http-proxy` 只认 HTTP 代理，不认 SOCKS；所以配成 `socks5(h)://` 时，
   zmusic 会在本机起一个只监听 `127.0.0.1` 的小桥（HTTP CONNECT → SOCKS5），
-  只给 YouTube 曲目用；播放网易云时会自动清空，回到直连
+  只给 yt-dlp 系的曲目（`youtube` / `soundcloud`）用；播放其它源时自动清空，回到直连
 - 配成 `http://…` 时原样交给 mpv，不起桥
 
-`yt-dlp` 不在 PATH、代理挂了、或超时：YouTube 那一路报错并置灰，网易云不受影响。
+`yt-dlp` 不在 PATH、代理挂了、或超时：该源报错并置灰，其它源不受影响。`yt-dlp` 系源的搜索
+结果按 `(源, 关键词)` 缓存 5 分钟，取流地址**不缓存**（会过期）。
+
+冒烟测试（真跑 `yt-dlp`，默认 ignore）：
+
+```bash
+ZMUSIC_LIVE_PROXY=socks5h://127.0.0.1:11080 cargo test --release ytdlp_live -- --ignored --nocapture
+```
 
 ### Meting 侧车（腾讯 / 酷狗 / 百度 / 酷我）
 
@@ -170,7 +205,7 @@ Rust 侧注册成四个源：`QQ 音乐 (Meting)` / `酷狗 (Meting)` / `千千/
 | `h` | 回主菜单 |
 | `s` | 搜索 |
 | `Tab` | 搜索页：输入栏 ↔ 结果列表 切换焦点 |
-| `S` | 搜索页：切换音乐源（网易云 / YouTube） |
+| `S` | 搜索页：切换音乐源（按「国内 / 国际 / 公开免费」分组循环） |
 | `F1`–`F4` / `Alt+0`–`3` | 搜索页：切搜索类型（歌曲 / 歌手 / 歌单 / 专辑），两种焦点下都可用 |
 | `g` | 下载列表 |
 | `v` | 正在播放界面 |
