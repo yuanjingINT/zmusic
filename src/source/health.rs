@@ -355,7 +355,6 @@ mod tests {
     fn sort_puts_netease_first_and_keeps_same_source_order() {
         let mut v = vec![
             song("a1", "x", "audius"),
-            song("b1", "x", "bilibili"),
             song("n1", "x", "netease"),
             song("a2", "x", "audius"),
             song("n2", "x", "netease"),
@@ -365,7 +364,7 @@ mod tests {
         let order: Vec<&str> = v.iter().map(|s| s.source.as_str()).collect();
         assert_eq!(
             order,
-            ["netease", "netease", "qq", "bilibili", "audius", "audius"],
+            ["netease", "netease", "qq", "audius", "audius"],
             "网易云在最前，同源内保持原顺序"
         );
         assert_eq!(v[0].name, "n1");

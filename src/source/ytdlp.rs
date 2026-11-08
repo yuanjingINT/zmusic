@@ -148,8 +148,7 @@ impl YtDlpSource {
 
 /// 跑一条 yt-dlp 命令，带超时；子进程 stdout 单独线程读，避免管道缓冲卡死。
 ///
-/// 抽成自由函数是因为 bilibili 这类源要自己搜（它的 web API 给标题/时长），
-/// 只在取流这一步借 yt-dlp。
+/// 抽成自由函数，方便以后有源自己搜索、只在取流这一步借 yt-dlp。
 pub(crate) fn run_cmd(
     exe: &str,
     proxy: Option<&str>,
@@ -202,7 +201,7 @@ pub(crate) fn run_cmd(
     Ok(text)
 }
 
-/// 用 yt-dlp 取一个已知 URL 的直链（bilibili 等「自己搜、借 yt-dlp 取流」的源用）。
+/// 用 yt-dlp 取一个已知 URL 的直链（给「自己搜、借 yt-dlp 取流」的源预留）。
 pub(crate) fn stream_url_of(
     exe: &str,
     proxy: Option<&str>,

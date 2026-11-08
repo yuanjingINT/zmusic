@@ -153,7 +153,6 @@ UI 据此禁用不支持的项，不靠猜。
 | 网易云 | `netease` | 国内 | 默认源，搜索/播放/歌词全通 |
 | QQ 音乐（直连） | `qq` | 国内 | 免费曲目可出流；会员曲返回「不可播放」 |
 | QQ / 酷狗 / 千千 / 酷我（Meting） | `meting:tencent` `meting:kugou` `meting:baidu` `meting:kuwo` | 国内 | 走侧车；tencent/kugou 能搜、取流需 cookie；baidu/kuwo 上游返回空壳 |
-| bilibili | `bilibili` | 国内 | 自带 web API 搜索（先取 `buvid3` 过风控），取流借 `yt-dlp`；结果是视频，标题里混切片/MV |
 | 咪咕音乐 | `migu` | 国内 | app 侧公开接口；搜索不带时长，会员曲返回「不可播放」 |
 | YouTube | `youtube` | 国际 | `yt-dlp`，国内需代理 |
 | SoundCloud | `soundcloud` | 国际 | `yt-dlp`，国内需代理；搜索较慢（6–7s） |
@@ -167,6 +166,7 @@ UI 据此禁用不支持的项，不靠猜。
 
 | 源 | 原因 |
 |----|------|
+| bilibili | 曾接入（自带 web API 搜索 + yt-dlp 取流），后按需求移除：结果多是视频切片、标题噪音大，且没有稳定的音频时长；代码与注册表已删 |
 | Bandcamp | `yt-dlp` 没有 Bandcamp 的搜索前缀，只能抓网页；而 `bandcamp.com` 本机直连被重置，经海外出口拿到的是 3038 字节的 `Client Challenge` 反爬页（没有 `tralbum` 数据），`yt-dlp -g` 报 `Unable to extract tralbum data` |
 | StreetVoice | 搜索 API 通（`/api/v4/search/?q=` 返回 JSON），但播放接口 `POST /api/v4/song/<id>/play/` 恒返回 `{}`（要登录态），网页版本身回 451 地区限制——能搜不能播，先不接 |
 | JOOX | `api.joox.com` / `api-jooxtt.sanook.com` 两个域名都回 `code=-2`、`itemlist` 为空（地区/风控），拿不到可用结果 |
@@ -186,6 +186,9 @@ UI 据此禁用不支持的项，不靠猜。
   有结果时状态收进列表标题右侧（`搜索结果   源 14/16`）
 - `V` 键在「搜索结果 ↔ 源状态明细」之间切换；`a` 切换 `S` 循环范围（只看可用 / 含离线）
 - 探测结果缓存 10 分钟；缺 key（如 Jamendo）和侧车没起标「需凭据」，网络挂了标「离线」，两者不混
+
+**没有时长的不进列表**：搜索/聚合结果里 `dt <= 0` 的曲目直接丢弃（没有进度条、点了才知道
+能不能放）。Meting 搜索不带时长，会在源内先并发补前 12 条再过滤；懒补时长补完仍为 0 的同样不显示。
 
 **能搜 ≠ 能播**：`Capabilities::can_stream` 标明一个源能不能出流。聚合只把 `can_stream=true`
 的源并进来；没配 cookie 的 Meting、上游只回空壳的源在列表里标「仅搜索」（红色），不塞进播放队列。
@@ -208,7 +211,7 @@ UI 据此禁用不支持的项，不靠猜。
 
 ```
 netease > qq > meting:tencent > meting:kugou > meting:baidu > meting:kuwo
-        > migu > bilibili > youtube > soundcloud
+        > migu > youtube > soundcloud
         > audius > ccmixter > jamendo > wikimedia > opengameart
 ```
 

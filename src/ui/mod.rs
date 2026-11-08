@@ -678,7 +678,9 @@ impl App {
                         }
                     }
                     match r {
-                        Ok(v) => {
+                        Ok(mut v) => {
+                            // 没有时长的曲目不进列表（单源也一样）
+                            crate::source::agg::retain_timed(&mut v.songs);
                             self.search = v.songs;
                             self.search_playlists = v.playlists;
                             self.search_albums = v.albums;

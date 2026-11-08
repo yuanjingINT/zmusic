@@ -28,13 +28,15 @@ UI 偏好（播放顺序、上次选的源、下载位置）存在 `~/.config/zm
 | QQ 音乐（直连） | 是 | 无；免费曲目可播，会员曲提示不可播放 |
 | QQ / 酷狗 / 千千 / 酷我（Meting） | 侧车起来就能搜 | `meting-sidecar` 服务；要播受限曲目还要 `[meting] cookie` |
 | 咪咕 | 是 | 无（公开接口） |
-| bilibili | 是 | 无（搜索用 bilibili 接口，取流借 `yt-dlp`） |
 | YouTube / SoundCloud | 装了 yt-dlp 就能搜 | `[ytdlp] binary` + **代理**（国内直连不通） |
 | Audius | 是 | 无 |
 | ccMixter | 是 | 无；音乐直链常被站点 403，运行期失败就降级 |
 | Jamendo | 否 | `[jamendo] client_id`（免费申请） |
 | Wikimedia Commons | 是 | 只解析 IPv6，网络没有 IPv6 时降级 |
 | OpenGameArt | 是 | 无（抓页面） |
+
+说明：bilibili 曾接入过（搜索走它的 web API、取流借 `yt-dlp`），后按需求移除——结果多是
+视频切片、时长不稳定，详见 README 的「没接入」表。
 
 「能搜不能播」的源（例如没配 cookie 的 Meting）在列表里可见，但标「仅搜索」，
 聚合搜索不会把它们的结果塞进播放队列。
@@ -80,6 +82,11 @@ curl -s '127.0.0.1:8123/api?server=tencent&type=search&id=%E6%99%B4%E5%A4%A9&lim
 [meting]
 url = "http://127.0.0.1:8123"
 ```
+
+> 注意：Meting 搜索接口不给时长，zmusic 会在源内补一次 `type=duration` 再过滤掉没有时长的行。
+> 侧车必须和 zmusic 同版本（包里的 `meting-sidecar.service` 会随包更新）；用旧侧车会出现
+> 「Meting 源搜不到东西」——这时先 `systemctl --user restart meting-sidecar`，确认
+> `curl '127.0.0.1:8123/api?server=tencent&type=duration&id=0039MnYb0qxYhV'` 返回 `duration_ms`。
 
 ### 可选：cookie（受限曲目换流）
 

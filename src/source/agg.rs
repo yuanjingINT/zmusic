@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 pub struct Config {
     /// 普通 HTTP 源的并发上限
     pub workers: usize,
-    /// 要 fork 子进程的源（yt-dlp / bilibili）单独限流，避免 fork 风暴
+    /// 要 fork 子进程的源（yt-dlp 系）单独限流，避免 fork 风暴
     pub subprocess_workers: usize,
     /// 到点就截止，没回来的算超时
     pub timeout: Duration,
@@ -106,6 +106,12 @@ pub fn clear_cache() {
     cache().clear();
 }
 
+/// 丢掉没有时长的曲目：列表里没有进度条的行，点了才知道能不能放，不如不显示。
+/// （懒补时长补完仍为 0 的同样会被丢掉）
+pub fn retain_timed(songs: &mut Vec<crate::models::Song>) {
+    songs.retain(|s| s.dt > 0);
+}
+
 /// 播放候选排序：同一首歌在各源的条目按源优先级排好，去掉 (source, s_id) 重复。
 pub fn order_candidates(list: &[crate::models::Song]) -> Vec<crate::models::Song> {
     let mut out: Vec<crate::models::Song> = Vec::with_capacity(list.len());
@@ -191,6 +197,10 @@ pub fn run<F: FnMut(Part)>(
                         .search(&q, limit, SearchKind::Song)
                         .map_err(|e| e.to_string()),
                 };
+                let mut r = r;
+                if let Ok(v) = r.as_mut() {
+                    retain_timed(&mut v.songs);
+                }
                 if tx.send((id, r)).is_err() {
                     break;
                 }
@@ -550,6 +560,31 @@ mod tests {
         assert_eq!(fails[0].0, "网易云");
         assert_eq!(fails[1], ("QQ(直连)".to_string(), "无版权".to_string()));
         assert_eq!(fails[2].0, "咪咕");
+    }
+
+    #[test]
+    fn retain_timed_drops_unknown_duration() {
+        let mk = |name: &str, dt: i64| Song {
+            id: 0,
+            name: name.to_string(),
+            ar: vec![Artist {
+                id: 0,
+                name: "a".into(),
+            }],
+            al: Album {
+                id: 0,
+                name: "al".into(),
+                pic_url: None,
+            },
+            dt,
+            fee: 0,
+            source: "meting:tencent".into(),
+            s_id: name.to_string(),
+        };
+        let mut v = vec![mk("有时长", 269_000), mk("没时长", 0), mk("负数", -1)];
+        retain_timed(&mut v);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "有时长");
     }
 
     #[test]

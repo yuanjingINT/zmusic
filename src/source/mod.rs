@@ -6,7 +6,6 @@
 
 pub mod agg;
 pub mod audius;
-pub mod bilibili;
 pub mod ccmixter;
 pub mod health;
 pub mod http;
@@ -113,7 +112,7 @@ pub trait Source: Send + Sync {
     fn lyric(&self, id: &TrackId) -> Result<Lyrics>;
     /// 取播放地址；拿不到（无版权/需会员/流过期）时返回 Ok(None)
     fn stream_url(&self, id: &TrackId, quality: &str) -> Result<Option<String>>;
-    /// 会不会 fork 子进程（yt-dlp / bilibili 取流）：聚合时单独限流，避免 fork 风暴
+    /// 会不会 fork 子进程（目前只有 yt-dlp 系）：聚合时单独限流，避免 fork 风暴
     fn is_subprocess(&self) -> bool {
         false
     }
@@ -127,7 +126,7 @@ pub trait Source: Send + Sync {
 /// 源优先级：数字小的排前面。`S` 循环顺序、聚合结果顺序、去重代表源都按它。
 ///
 /// 网易云永远是第一（用户要求），其余按「国内 → 国际 → 公开免费」，
-/// 国内内部顺序：QQ 直连 > Meting 系 > 咪咕 > bilibili。
+/// 国内内部顺序：QQ 直连 > Meting 系 > 咪咕。
 pub fn source_priority(id: &str) -> u8 {
     match id {
         "netease" => 0,
@@ -137,14 +136,13 @@ pub fn source_priority(id: &str) -> u8 {
         "meting:baidu" => 4,
         "meting:kuwo" => 5,
         "migu" => 6,
-        "bilibili" => 7,
-        "youtube" => 8,
-        "soundcloud" => 9,
-        "audius" => 10,
-        "ccmixter" => 11,
-        "jamendo" => 12,
-        "wikimedia" => 13,
-        "opengameart" => 14,
+        "youtube" => 7,
+        "soundcloud" => 8,
+        "audius" => 9,
+        "ccmixter" => 10,
+        "jamendo" => 11,
+        "wikimedia" => 12,
+        "opengameart" => 13,
         _ => 99,
     }
 }
@@ -165,7 +163,6 @@ pub fn source_display(id: &str) -> String {
         "meting:kuwo" => "酷我".to_string(),
         "youtube" => "YouTube".to_string(),
         "soundcloud" => "SoundCloud".to_string(),
-        "bilibili" => "bilibili".to_string(),
         "migu" => "咪咕".to_string(),
         "audius" => "Audius".to_string(),
         "ccmixter" => "ccMixter".to_string(),
@@ -230,7 +227,7 @@ impl SourceRegistry {
     ) -> Self {
         let mut reg = SourceRegistry::new();
         // 注册顺序 = `S` 循环顺序 = 去重代表源的优先级：网易云钉死第一，
-        // 然后国内（QQ 直连 → Meting 系 → 咪咕 → bilibili）→ 国际 → 公开免费
+        // 然后国内（QQ 直连 → Meting 系 → 咪咕）→ 国际 → 公开免费
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
         reg.register(Arc::new(qq::QqSource::new()));
         for server in ["tencent", "kugou", "baidu", "kuwo"] {
@@ -241,7 +238,6 @@ impl SourceRegistry {
             )));
         }
         reg.register(Arc::new(migu::MiguSource::new()));
-        reg.register(Arc::new(bilibili::BilibiliSource::with_exe(&ytdlp_bin)));
         // 国际
         // 走 yt-dlp 的一组站点（同一套逻辑按 Site 参数化）
         for site in [ytdlp::Site::YouTube, ytdlp::Site::SoundCloud] {
@@ -332,7 +328,6 @@ mod tests {
         assert_eq!(s.name(), "网易云音乐");
         assert!(reg.get("youtube").is_some(), "YouTube 也应默认注册");
         assert!(reg.get("soundcloud").is_some(), "SoundCloud 应默认注册");
-        assert!(reg.get("bilibili").is_some(), "bilibili 应默认注册");
         assert!(reg.get("migu").is_some(), "咪咕应默认注册");
         assert!(reg.get("bandcamp").is_none(), "Bandcamp 无搜索入口，不注册");
         assert!(reg.get("spotify").is_none());
@@ -428,7 +423,6 @@ mod tests {
             "meting:tencent",
             "meting:kugou",
             "migu",
-            "bilibili",
             "youtube",
             "soundcloud",
             "audius",
@@ -461,7 +455,6 @@ mod tests {
             ("meting:kuwo", "酷我"),
             ("youtube", "YouTube"),
             ("soundcloud", "SoundCloud"),
-            ("bilibili", "bilibili"),
             ("migu", "咪咕"),
             ("audius", "Audius"),
             ("ccmixter", "ccMixter"),

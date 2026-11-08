@@ -6,6 +6,7 @@ use crate::source::http;
 use crate::source::{Capabilities, SearchKind, Source, TrackId};
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::sync::Arc;
 
 pub struct MetingSource {
     base: String,
@@ -130,6 +131,71 @@ impl MetingSource {
     }
 }
 
+/// 取单曲时长（秒级 API 返回毫秒）；拿不到回 None
+fn duration_of(base: &str, server: &'static str, cookie: Option<&str>, id: &str) -> Option<i64> {
+    let url = format!(
+        "{}/api?server={}&type=duration&id={}",
+        base,
+        server,
+        http::enc(id)
+    );
+    let mut req = http::client().get(&url);
+    if let Some(c) = cookie {
+        req = req.header("x-meting-cookie", c);
+    }
+    let v: Value = req.send().ok()?.json().ok()?;
+    v.get("duration_ms")
+        .and_then(|x| x.as_i64())
+        .filter(|ms| *ms > 0)
+}
+
+impl MetingSource {
+    /// 搜索接口不给时长：并发补前 `max` 条，仍拿不到时长的直接丢掉
+    /// （没有时长的曲目在列表里没有进度条，点了才知道能不能放）。
+    fn fill_durations(&self, songs: Vec<Song>, max: usize) -> Vec<Song> {
+        use std::collections::HashMap;
+        let songs: Vec<Song> = songs.into_iter().take(max).collect();
+        if songs.is_empty() {
+            return songs;
+        }
+        let cookie = self.cookie().map(Arc::new);
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, i64)>();
+        for (i, song) in songs.iter().enumerate() {
+            if song.dt > 0 {
+                let _ = tx.send((i, song.dt));
+                continue;
+            }
+            let base = self.base.clone();
+            let server = self.server;
+            let cookie = cookie.clone();
+            let id = song.s_id.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let ms = duration_of(&base, server, cookie.as_ref().map(|c| c.as_str()), &id)
+                    .unwrap_or(0);
+                let _ = tx.send((i, ms));
+            });
+        }
+        drop(tx);
+        let mut got: HashMap<usize, i64> = HashMap::new();
+        while let Ok((i, ms)) = rx.recv() {
+            got.insert(i, ms);
+        }
+        songs
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, mut s)| {
+                let dt = got.get(&i).copied().unwrap_or(0);
+                if dt <= 0 {
+                    return None;
+                }
+                s.dt = dt;
+                Some(s)
+            })
+            .collect()
+    }
+}
+
 impl Source for MetingSource {
     fn id(&self) -> &'static str {
         self.id_str
@@ -170,8 +236,10 @@ impl Source for MetingSource {
             http::enc(keyword),
             limit.clamp(1, 30)
         ))?;
+        // 最多补前 12 条，避免一屏超出部分白打接口
+        let songs = self.fill_durations(parse_search(&v, self.id_str), 12);
         Ok(SearchResult {
-            songs: parse_search(&v, self.id_str),
+            songs,
             ..Default::default()
         })
     }
