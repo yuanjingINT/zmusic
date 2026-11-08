@@ -71,6 +71,10 @@ impl Source for OpenGameArtSource {
         "OpenGameArt"
     }
 
+    fn group(&self) -> &'static str {
+        "公开免费"
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             kinds: vec![SearchKind::Song],

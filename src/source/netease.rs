@@ -207,6 +207,10 @@ impl crate::source::Source for NetEaseSource {
         "网易云音乐"
     }
 
+    fn group(&self) -> &'static str {
+        "国内"
+    }
+
     fn capabilities(&self) -> crate::source::Capabilities {
         crate::source::Capabilities {
             kinds: vec![

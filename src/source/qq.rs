@@ -100,7 +100,11 @@ impl Source for QqSource {
     }
 
     fn name(&self) -> &'static str {
-        "QQ 音乐"
+        "QQ 音乐 (直连)"
+    }
+
+    fn group(&self) -> &'static str {
+        "国内"
     }
 
     fn capabilities(&self) -> Capabilities {

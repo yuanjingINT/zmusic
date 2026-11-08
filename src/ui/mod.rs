@@ -1292,15 +1292,15 @@ impl App {
         });
     }
 
-    /// 当前源的显示名 + 是否可用（缺 yt-dlp 之类就置灰）
-    fn current_source(&self) -> (&'static str, bool) {
+    /// 当前源的「组 · 名称」+ 是否可用
+    fn current_source(&self) -> (String, bool) {
         match self.registry.get(&self.source_id) {
             // 不在渲染/按键路径里探活（会卡 UI）；可用性只看最近一次搜索结果
             Some(s) => (
-                s.name(),
+                format!("{} · {}", s.group(), s.name()),
                 !self.failed_sources.contains(&self.source_id),
             ),
-            None => ("未知", false),
+            None => ("未知".to_string(), false),
         }
     }
 

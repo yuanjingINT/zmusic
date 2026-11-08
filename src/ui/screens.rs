@@ -439,6 +439,7 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
         f.set_cursor_position((x, input_area.y + 1));
     }
     let (src_name, src_ok) = app.current_source();
+    let src_name = src_name.as_str();
     let types = ["0歌曲", "1歌手", "2歌单", "3专辑"];
     let mut spans: Vec<Span> = Vec::with_capacity(6);
     spans.push(Span::styled(

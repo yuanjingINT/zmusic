@@ -107,6 +107,10 @@ impl Source for WikimediaSource {
         "Wikimedia Commons"
     }
 
+    fn group(&self) -> &'static str {
+        "公开免费"
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             kinds: vec![SearchKind::Song],

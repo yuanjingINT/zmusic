@@ -104,6 +104,10 @@ impl Source for MetingSource {
         self.label
     }
 
+    fn group(&self) -> &'static str {
+        "国内"
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             kinds: vec![SearchKind::Song],

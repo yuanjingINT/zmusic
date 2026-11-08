@@ -183,6 +183,10 @@ impl Source for YouTubeSource {
         "YouTube"
     }
 
+    fn group(&self) -> &'static str {
+        "国际"
+    }
+
     fn capabilities(&self) -> crate::source::Capabilities {
         crate::source::Capabilities {
             kinds: vec![SearchKind::Song],

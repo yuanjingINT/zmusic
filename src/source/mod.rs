@@ -97,6 +97,10 @@ pub trait Source: Send + Sync {
     fn is_available(&self) -> bool {
         true
     }
+    /// 分组（国内 / 国际 / 公开免费），S 循环与 UI 显示都按它来
+    fn group(&self) -> &'static str {
+        "其它"
+    }
     fn capabilities(&self) -> Capabilities;
     fn search(&self, keyword: &str, limit: i32, kind: SearchKind) -> Result<SearchResult>;
     fn lyric(&self, id: &TrackId) -> Result<Lyrics>;
@@ -149,12 +153,8 @@ impl SourceRegistry {
     /// 默认注册网易云 + YouTube（后者依赖 yt-dlp，缺了就自己标不可用）
     pub fn with_defaults(netease_base: String, proxy: Option<String>, meting_base: String) -> Self {
         let mut reg = SourceRegistry::new();
+        // 国内
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
-        reg.register(Arc::new(audius::AudiusSource::new()));
-        reg.register(Arc::new(ccmixter::CcMixterSource::new()));
-        reg.register(Arc::new(wikimedia::WikimediaSource::new()));
-        reg.register(Arc::new(jamendo::JamendoSource::new()));
-        reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
         reg.register(Arc::new(qq::QqSource::new()));
         for server in ["tencent", "kugou", "baidu", "kuwo"] {
             reg.register(Arc::new(meting::MetingSource::new(
@@ -162,11 +162,18 @@ impl SourceRegistry {
                 server,
             )));
         }
+        // 国际
         let yt = match proxy {
             Some(p) => youtube::YouTubeSource::with_proxy("yt-dlp", Some(p)),
             None => youtube::YouTubeSource::new(),
         };
         reg.register(Arc::new(yt));
+        // 公开免费
+        reg.register(Arc::new(audius::AudiusSource::new()));
+        reg.register(Arc::new(ccmixter::CcMixterSource::new()));
+        reg.register(Arc::new(wikimedia::WikimediaSource::new()));
+        reg.register(Arc::new(jamendo::JamendoSource::new()));
+        reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
         reg
     }
 
