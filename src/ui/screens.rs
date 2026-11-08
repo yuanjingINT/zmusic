@@ -184,47 +184,50 @@ fn render_ctx_menu(f: &mut Frame, app: &mut App) {
 }
 
 fn render_top(f: &mut Frame, area: Rect, app: &mut App) {
-    let mut line = Line::from(Span::styled(
-        format!(" zmusic · {}", app.screen.name()),
-        theme::title(),
-    ));
+    let mut spans = Vec::with_capacity(4);
+    spans.push(Span::styled(" zmusic · ", theme::title()));
+    spans.push(Span::styled(app.screen.name(), theme::title()));
     if let Some((msg, _)) = &app.toast {
-        line.push_span(Span::styled(format!("   {}", msg), theme::warn()));
+        spans.push(Span::styled("   ", theme::warn()));
+        spans.push(Span::styled(msg.as_str(), theme::warn()));
     }
-    f.render_widget(Paragraph::new(line), area);
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
     let st = app.player.state();
-    let (song, dur) = match &app.now_playing {
-        Some(s) => (
-            format!("{} - {}", s.name, util::artists_of(&s.ar)),
-            st.duration,
-        ),
-        None => ("未在播放".to_string(), st.duration),
-    };
-    let play = if st.paused { "⏸" } else { "▶" };
-    let mut line1 = Line::from(vec![
-        Span::styled(format!(" {} ", play), theme::primary()),
-        Span::styled(song, theme::song_title()),
-        Span::styled(
-            format!(
-                "  {} / {}  vol {}",
-                util::fmt_time(st.time_pos),
-                util::fmt_time(dur),
-                st.volume
-            ),
-            theme::dim(),
-        ),
-    ]);
-    if app.now_playing.is_some() {
-        if let Some(idx) = app.queue_idx {
-            line1.push_span(Span::styled(
-                format!("   [{} / {}]", idx + 1, app.queue.len()),
-                theme::dim(),
-            ));
+    let dur = st.duration;
+    // 渲染热路径：文本拼进两块复用缓冲区，避免每帧 6 次 format! 的堆分配
+    let mut artists_buf = String::with_capacity(64);
+    let mut meta_buf = String::with_capacity(64);
+    let mut spans: Vec<Span> = Vec::with_capacity(5);
+    spans.push(Span::styled(
+        if st.paused { " ⏸ " } else { " ▶ " },
+        theme::primary(),
+    ));
+    match &app.now_playing {
+        Some(s) => {
+            spans.push(Span::styled(s.name.as_str(), theme::song_title()));
+            artists_buf.push_str(" - ");
+            util::artists_of_into(&mut artists_buf, &s.ar);
+            spans.push(Span::styled(artists_buf.as_str(), theme::song_title()));
         }
+        None => spans.push(Span::styled("未在播放", theme::song_title())),
     }
+    use std::fmt::Write as _;
+    let mut tbuf = String::with_capacity(8);
+    util::fmt_time_into(&mut tbuf, st.time_pos);
+    meta_buf.push_str("  ");
+    meta_buf.push_str(&tbuf);
+    meta_buf.push_str(" / ");
+    util::fmt_time_into(&mut tbuf, dur);
+    meta_buf.push_str(&tbuf);
+    let _ = write!(meta_buf, "  vol {}", st.volume);
+    if let Some(idx) = app.queue_idx {
+        let _ = write!(meta_buf, "   [{} / {}]", idx + 1, app.queue.len());
+    }
+    spans.push(Span::styled(meta_buf.as_str(), theme::dim()));
+    let line1 = Line::from(spans);
     let ratio = match (st.time_pos, dur) {
         (Some(t), Some(d)) if d > 0.0 => (t / d).clamp(0.0, 1.0),
         _ => 0.0,
@@ -233,20 +236,23 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
         .gauge_style(Style::new().fg(ratatui::style::Color::Cyan))
         .ratio(ratio)
         .label(format!("{:.1}%", ratio * 100.0));
+    let mut hint_spans = Vec::with_capacity(2);
+    hint_spans.push(Span::styled(
+        crate::ui::hints::hints(app.screen, app.search_input_focus),
+        theme::dim(),
+    ));
     let sel_n = app.selected.len();
-    let sel_hint = if sel_n > 0 {
-        format!(" 已选 {} 首 ", sel_n)
+    let sel_buf = if sel_n > 0 {
+        let mut b = String::with_capacity(16);
+        let _ = write!(b, "  已选 {} 首 ", sel_n);
+        b
     } else {
         String::new()
     };
-    let hints = Line::from(Span::styled(
-        format!(
-            " {} {}",
-            crate::ui::hints::hints(app.screen, app.search_input_focus),
-            sel_hint
-        ),
-        theme::dim(),
-    ));
+    if !sel_buf.is_empty() {
+        hint_spans.push(Span::styled(sel_buf.as_str(), theme::dim()));
+    }
+    let hints = Line::from(hint_spans);
     let [r1, r2, r3] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
             .areas(area);
@@ -330,7 +336,7 @@ fn render_playlists(f: &mut Frame, area: Rect, app: &mut App) {
                 p.track_count
             );
             ListItem::new(Line::from(vec![
-                Span::raw(p.name.clone()),
+                Span::raw(p.name.as_str()),
                 Span::styled(meta, theme::dim()),
             ]))
         })
@@ -393,7 +399,7 @@ fn render_albums(f: &mut Frame, area: Rect, app: &mut App) {
                 .map(util::year_of_ms)
                 .unwrap_or_default();
             ListItem::new(Line::from(vec![
-                Span::raw(a.name.clone()),
+                Span::raw(a.name.as_str()),
                 Span::styled(format!("  {}  {}", artist, year), theme::dim()),
             ]))
         })
@@ -659,9 +665,9 @@ fn render_song_table(
                     format!("{:>3}", top + i + 1),
                     theme::dim(),
                 )),
-                Cell::from(s.name.clone()),
+                Cell::from(s.name.as_str()),
                 Cell::from(util::artists_of(&s.ar)),
-                Cell::from(s.al.name.clone()),
+                Cell::from(s.al.name.as_str()),
                 Cell::from(util::fmt_time(Some(s.dt as f64 / 1000.0))),
             ])
         })

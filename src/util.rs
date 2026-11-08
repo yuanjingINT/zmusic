@@ -20,6 +20,29 @@ pub fn sanitize_filename(name: &str) -> String {
     }
 }
 
+/// 写进复用缓冲区的版本：渲染热路径每帧调用，避免每条都分配 String
+pub fn fmt_time_into(out: &mut String, secs: Option<f64>) {
+    out.clear();
+    match secs {
+        Some(s) if s.is_finite() && s > 0.0 => {
+            let total = s as i64;
+            use std::fmt::Write as _;
+            let _ = write!(out, "{:02}:{:02}", total / 60, total % 60);
+        }
+        _ => out.push_str("--:--"),
+    }
+}
+
+pub fn artists_of_into(out: &mut String, ar: &[Artist]) {
+    out.clear();
+    for (i, a) in ar.iter().enumerate() {
+        if i > 0 {
+            out.push_str(" & ");
+        }
+        out.push_str(&a.name);
+    }
+}
+
 pub fn fmt_time(secs: Option<f64>) -> String {
     match secs {
         Some(s) if s.is_finite() && s > 0.0 => {
