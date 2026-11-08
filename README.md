@@ -156,6 +156,10 @@ UI 据此禁用不支持的项，不靠猜。
 | 源 | 原因 |
 |----|------|
 | Bandcamp | `yt-dlp` 没有 Bandcamp 的搜索前缀，只能抓网页；而 `bandcamp.com` 本机直连被重置，经海外出口拿到的是 3038 字节的 `Client Challenge` 反爬页（没有 `tralbum` 数据），`yt-dlp -g` 报 `Unable to extract tralbum data` |
+| StreetVoice | 搜索 API 通（`/api/v4/search/?q=` 返回 JSON），但播放接口 `POST /api/v4/song/<id>/play/` 恒返回 `{}`（要登录态），网页版本身回 451 地区限制——能搜不能播，先不接 |
+| JOOX | `api.joox.com` / `api-jooxtt.sanook.com` 两个域名都回 `code=-2`、`itemlist` 为空（地区/风控），拿不到可用结果 |
+| MOOV | `api.moov.hk` 直连超时，没有公开搜索接口 |
+| 汽水音乐（抖音） | `api.qishui.com/luna/pc/search/track` 回 200 但 0 字节，要 `a_bogus`/`X-Bogus` 签名；网页端是 SPA 壳，不走逆签名就不碰 |
 | Free Music Archive | 老 API 404，新接口要 key |
 | Spotify / Tidal / Qobuz / Apple Music | 官方 API 只给元数据与 30s 试听，`stream_url` 只能返回 `None`，等有账号 token 再谈 |
 
