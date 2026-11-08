@@ -183,6 +183,14 @@ impl Source for YouTubeSource {
         "YouTube"
     }
 
+    fn capabilities(&self) -> crate::source::Capabilities {
+        crate::source::Capabilities {
+            kinds: vec![SearchKind::Song],
+            lyrics: false,
+            qualities: Vec::new(),
+        }
+    }
+
     fn is_available(&self) -> bool {
         self.probe()
     }

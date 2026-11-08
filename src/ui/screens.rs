@@ -453,8 +453,14 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
         .iter()
         .enumerate()
         .map(|(i, t)| {
+            let supported = app
+                .source_caps()
+                .map(|c| c.supports(crate::source::SearchKind::from_index(i)))
+                .unwrap_or(true);
             let s = if i == app.search_type {
                 theme::primary().add_modifier(ratatui::style::Modifier::BOLD)
+            } else if !supported {
+                theme::dim().add_modifier(ratatui::style::Modifier::CROSSED_OUT)
             } else {
                 theme::dim()
             };

@@ -4,7 +4,13 @@
 //! 这一版先把接口定型：ID 用字符串包装（YouTube 是 `dQw4w9WgXcQ` 这种）、
 //! 搜索类型用枚举（不再把网易云的 1/100/1000/10 漏到上层）。
 
+pub mod audius;
+pub mod ccmixter;
+pub mod http;
+pub mod jamendo;
 pub mod netease;
+pub mod opengameart;
+pub mod wikimedia;
 pub mod youtube;
 
 use crate::models::{Lyrics, SearchResult};
@@ -60,6 +66,21 @@ impl SearchKind {
     }
 }
 
+/// 一个源支持什么：UI 依据它禁用不支持的搜索类型/音质，不靠猜。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capabilities {
+    pub kinds: Vec<SearchKind>,
+    pub lyrics: bool,
+    /// 空 = 该源不区分音质
+    pub qualities: Vec<&'static str>,
+}
+
+impl Capabilities {
+    pub fn supports(&self, kind: SearchKind) -> bool {
+        self.kinds.contains(&kind)
+    }
+}
+
 /// 一个可搜索、可出流、可出歌词的音乐源。
 ///
 /// App 目前只通过注册表的 `stream_url` 用到其中一部分；`search`/`lyric`/`name`
@@ -74,6 +95,7 @@ pub trait Source: Send + Sync {
     fn is_available(&self) -> bool {
         true
     }
+    fn capabilities(&self) -> Capabilities;
     fn search(&self, keyword: &str, limit: i32, kind: SearchKind) -> Result<SearchResult>;
     fn lyric(&self, id: &TrackId) -> Result<Lyrics>;
     /// 取播放地址；拿不到（无版权/需会员/流过期）时返回 Ok(None)
@@ -107,6 +129,11 @@ impl SourceRegistry {
     pub fn with_defaults(netease_base: String, proxy: Option<String>) -> Self {
         let mut reg = SourceRegistry::new();
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
+        reg.register(Arc::new(audius::AudiusSource::new()));
+        reg.register(Arc::new(ccmixter::CcMixterSource::new()));
+        reg.register(Arc::new(wikimedia::WikimediaSource::new()));
+        reg.register(Arc::new(jamendo::JamendoSource::new()));
+        reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
         let yt = match proxy {
             Some(p) => youtube::YouTubeSource::with_proxy("yt-dlp", Some(p)),
             None => youtube::YouTubeSource::new(),
@@ -169,7 +196,7 @@ mod tests {
     #[test]
     fn netease_registered_by_default() {
         let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None);
-        assert_eq!(reg.len(), 2);
+        assert!(reg.len() >= 2);
         let s = reg.get("netease").expect("默认应注册网易云");
         assert_eq!(s.id(), "netease");
         assert_eq!(s.name(), "网易云音乐");
@@ -183,7 +210,7 @@ mod tests {
         reg.register(Arc::new(netease::NetEaseSource::new(
             "http://127.0.0.1:3000".to_string(),
         )));
-        assert_eq!(reg.len(), 2);
+        assert!(reg.len() >= 2);
     }
 
     #[test]

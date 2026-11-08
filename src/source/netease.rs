@@ -207,6 +207,19 @@ impl crate::source::Source for NetEaseSource {
         "网易云音乐"
     }
 
+    fn capabilities(&self) -> crate::source::Capabilities {
+        crate::source::Capabilities {
+            kinds: vec![
+                SearchKind::Song,
+                SearchKind::Artist,
+                SearchKind::Playlist,
+                SearchKind::Album,
+            ],
+            lyrics: true,
+            qualities: vec!["standard", "higher", "exhigh", "lossless", "hires"],
+        }
+    }
+
     fn search(&self, keyword: &str, limit: i32, kind: SearchKind) -> Result<SearchResult> {
         NetEaseSource::search(self, keyword, limit, kind)
     }

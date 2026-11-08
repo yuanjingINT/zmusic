@@ -1235,9 +1235,24 @@ impl App {
         }
     }
 
+    /// 当前源支持哪些搜索类型（UI 据此置灰/拒绝）
+    fn source_caps(&self) -> Option<crate::source::Capabilities> {
+        self.registry.get(&self.source_id).map(|s| s.capabilities())
+    }
+
     fn set_search_type(&mut self, t: usize) {
         if t == self.search_type {
             return;
+        }
+        let kind = crate::source::SearchKind::from_index(t);
+        if let Some(caps) = self.source_caps() {
+            if !caps.supports(kind) {
+                self.toast = Some((
+                    "当前源不支持这种搜索，已保持原样".to_string(),
+                    Instant::now(),
+                ));
+                return;
+            }
         }
         self.search_type = t;
         self.search_sel = 0;
@@ -1276,6 +1291,11 @@ impl App {
         }
         let cur = ids.iter().position(|id| *id == self.source_id).unwrap_or(0);
         self.source_id = ids[(cur + 1) % ids.len()].clone();
+        if let Some(caps) = self.source_caps() {
+            if !caps.supports(crate::source::SearchKind::from_index(self.search_type)) {
+                self.search_type = 0;
+            }
+        }
         self.search_sel = 0;
         self.selected.clear();
         let (name, avail) = self.current_source();
