@@ -21,7 +21,7 @@ use std::io::stdout;
 fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load();
     let api = source::netease::NetEaseSource::new(cfg.api_base.clone());
-    let registry = std::sync::Arc::new(source::SourceRegistry::with_defaults(cfg.api_base.clone(), cfg.proxy.clone()));
+    let registry = std::sync::Arc::new(source::SourceRegistry::with_defaults(cfg.api_base.clone(), cfg.proxy.clone(), cfg.meting_base.clone()));
     let quality = std::sync::Arc::new(std::sync::RwLock::new(cfg.quality.clone()));
     let downloader = downloader::Downloader::new(
         cfg.download_dir.clone(),

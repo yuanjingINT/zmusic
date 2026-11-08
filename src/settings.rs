@@ -15,6 +15,9 @@ pub struct Settings {
     /// 播放顺序（sequential/shuffle/repeat_one）
     #[serde(default)]
     pub play_mode: String,
+    /// 上次选中的音乐源 id，启动时恢复
+    #[serde(default)]
+    pub source: String,
 }
 
 impl Settings {

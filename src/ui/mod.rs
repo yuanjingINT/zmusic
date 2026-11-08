@@ -212,8 +212,14 @@ impl App {
             player,
             downloader,
             quality,
+            source_id: if !settings.source.is_empty()
+                && registry.get(&settings.source).is_some()
+            {
+                settings.source.clone()
+            } else {
+                "netease".to_string()
+            },
             registry,
-            source_id: "netease".to_string(),
             favorites,
             tx,
             rx,
@@ -1278,7 +1284,7 @@ impl App {
     /// 当前源的显示名 + 是否可用（缺 yt-dlp 之类就置灰）
     fn current_source(&self) -> (&'static str, bool) {
         match self.registry.get(&self.source_id) {
-            Some(s) => (s.name(), s.is_available()),
+            Some(s) => (s.name(), self.registry.available(&self.source_id)),
             None => ("未知", false),
         }
     }
@@ -1291,6 +1297,8 @@ impl App {
         }
         let cur = ids.iter().position(|id| *id == self.source_id).unwrap_or(0);
         self.source_id = ids[(cur + 1) % ids.len()].clone();
+        self.settings.source = self.source_id.clone();
+        self.settings.save(&self.cfg.settings_path);
         if let Some(caps) = self.source_caps() {
             if !caps.supports(crate::source::SearchKind::from_index(self.search_type)) {
                 self.search_type = 0;

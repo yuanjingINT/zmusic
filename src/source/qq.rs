@@ -65,7 +65,7 @@ pub fn parse_search(v: &Value) -> Vec<Song> {
                             name: s
                                 .get("albumname")
                                 .and_then(|x| x.as_str())
-                                .unwrap_or("QQ 音乐")
+                                .unwrap_or("QQ 音乐 (直连)")
                                 .to_string(),
                             pic_url: None,
                         },

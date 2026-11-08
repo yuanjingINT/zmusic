@@ -8,6 +8,7 @@ pub mod audius;
 pub mod ccmixter;
 pub mod http;
 pub mod jamendo;
+pub mod meting;
 pub mod netease;
 pub mod opengameart;
 pub mod qq;
@@ -116,6 +117,8 @@ pub fn track_of(song: &crate::models::Song) -> TrackId {
 #[allow(dead_code)]
 pub struct SourceRegistry {
     sources: Vec<Arc<dyn Source>>,
+    /// 探活结果缓存：网络型源探一次要几百毫秒，绝不能每帧/每次按键都探
+    avail: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, bool)>>,
 }
 
 #[allow(dead_code)]
@@ -123,11 +126,28 @@ impl SourceRegistry {
     pub fn new() -> Self {
         SourceRegistry {
             sources: Vec::new(),
+            avail: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
+    /// 带 60s 缓存的可用性判断
+    pub fn available(&self, id: &str) -> bool {
+        const TTL: std::time::Duration = std::time::Duration::from_secs(60);
+        if let Some((at, ok)) = self.avail.lock().unwrap().get(id) {
+            if at.elapsed() < TTL {
+                return *ok;
+            }
+        }
+        let ok = self.get(id).map(|s| s.is_available()).unwrap_or(false);
+        self.avail
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), (std::time::Instant::now(), ok));
+        ok
+    }
+
     /// 默认注册网易云 + YouTube（后者依赖 yt-dlp，缺了就自己标不可用）
-    pub fn with_defaults(netease_base: String, proxy: Option<String>) -> Self {
+    pub fn with_defaults(netease_base: String, proxy: Option<String>, meting_base: String) -> Self {
         let mut reg = SourceRegistry::new();
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
         reg.register(Arc::new(audius::AudiusSource::new()));
@@ -136,6 +156,12 @@ impl SourceRegistry {
         reg.register(Arc::new(jamendo::JamendoSource::new()));
         reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
         reg.register(Arc::new(qq::QqSource::new()));
+        for server in ["tencent", "kugou", "baidu", "kuwo"] {
+            reg.register(Arc::new(meting::MetingSource::new(
+                meting_base.clone(),
+                server,
+            )));
+        }
         let yt = match proxy {
             Some(p) => youtube::YouTubeSource::with_proxy("yt-dlp", Some(p)),
             None => youtube::YouTubeSource::new(),
@@ -197,7 +223,7 @@ mod tests {
 
     #[test]
     fn netease_registered_by_default() {
-        let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None);
+        let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None, "http://127.0.0.1:8123".to_string());
         assert!(reg.len() >= 2);
         let s = reg.get("netease").expect("默认应注册网易云");
         assert_eq!(s.id(), "netease");
@@ -208,7 +234,7 @@ mod tests {
 
     #[test]
     fn duplicate_register_is_ignored() {
-        let mut reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None);
+        let mut reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None, "http://127.0.0.1:8123".to_string());
         reg.register(Arc::new(netease::NetEaseSource::new(
             "http://127.0.0.1:3000".to_string(),
         )));
@@ -217,7 +243,7 @@ mod tests {
 
     #[test]
     fn unknown_source_stream_url_errors_clearly() {
-        let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None);
+        let reg = SourceRegistry::with_defaults("http://127.0.0.1:3000".to_string(), None, "http://127.0.0.1:8123".to_string());
         let err = reg
             .stream_url("spotify", &TrackId::from("dQw4w9WgXcQ"), "exhigh")
             .expect_err("未知源必须报错");

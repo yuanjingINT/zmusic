@@ -172,7 +172,42 @@ wait_ready() {
     return 1
 }
 
+METING_DIR="$HOME/.local/share/zmusic/meting"
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)/sidecar"
+
+install_meting() {
+    # Meting 侧车：覆盖腾讯/酷狗/百度/酷我。没起或装不上时，zmusic 里那组源自动置灰。
+    command -v node >/dev/null || { echo "!! 没有 node，跳过 Meting 侧车"; return 0; }
+    if [ ! -f "$METING_DIR/node_modules/@meting/core/package.json" ]; then
+        echo "==> 安装 Meting 侧车"
+        mkdir -p "$METING_DIR"
+        cp -f "$SRC_DIR/meting.js" "$SRC_DIR/package.json" "$METING_DIR/" 2>/dev/null || return 0
+        ( cd "$METING_DIR" && npm i --no-audit --no-fund ) || { echo "!! Meting 侧车安装失败，跳过"; return 0; }
+    fi
+    mkdir -p "$HOME/.config/systemd/user"
+    cat > "$HOME/.config/systemd/user/meting-sidecar.service" <<UNIT
+[Unit]
+Description=Meting sidecar for zmusic (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$METING_DIR
+Environment=PORT=8123
+ExecStart=$(command -v node) meting.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+UNIT
+    systemctl --user daemon-reload
+    systemctl --user enable --now meting-sidecar.service >/dev/null 2>&1 || true
+}
+
 install_api
+install_meting
 write_service
 
 case "$MODE" in

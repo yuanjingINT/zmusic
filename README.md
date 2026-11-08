@@ -121,6 +121,7 @@ sudo apt install build-essential pkg-config libssl-dev
 | `NCM_DIR` | `~/Music/ncm` | 下载目录 |
 | `NCM_QUALITY` | `exhigh` | 音质：`standard` / `higher` / `exhigh` / `lossless` / `hires` |
 | `ZMUSIC_PROXY` | 空 | 可选代理，如 `socks5h://127.0.0.1:11080`；YouTube 源必需，见下 |
+| `ZMUSIC_METING_URL` | `http://127.0.0.1:8123` | Meting 侧车地址（腾讯/酷狗/百度/酷我） |
 
 运行时会写：
 
@@ -149,6 +150,18 @@ ZMUSIC_PROXY=socks5h://127.0.0.1:11080 zmusic
 - 配成 `http://…` 时原样交给 mpv，不起桥
 
 `yt-dlp` 不在 PATH、代理挂了、或超时：YouTube 那一路报错并置灰，网易云不受影响。
+
+### Meting 侧车（腾讯 / 酷狗 / 百度 / 酷我）
+
+国内这几家用 `sidecar/meting.js`（Node + `@meting/core`）统一承接，只监听 `127.0.0.1:8123`：
+
+```bash
+cd sidecar && npm i && node meting.js        # 或在仓库根跑 ./setup.sh，会装成 systemd --user
+```
+
+Rust 侧注册成四个源：`QQ 音乐 (Meting)` / `酷狗 (Meting)` / `千千/百度 (Meting)` / `酷我 (Meting)`；
+`ZMUSIC_METING_URL` 可改地址（默认 `http://127.0.0.1:8123`）。侧车没起或装不上，这组源整体置灰，
+不影响网易云和其它源。QQ 另有直连源（标 `QQ 音乐 (直连)`）作回退。
 
 ## 快捷键
 

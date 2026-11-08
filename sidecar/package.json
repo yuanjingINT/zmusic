@@ -1,0 +1,8 @@
+{
+  "name": "zmusic-meting-sidecar",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@meting/core": "^1.6.2"
+  }
+}
