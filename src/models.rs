@@ -9,24 +9,17 @@ pub struct Artist {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct Album {
     pub id: i64,
     pub name: String,
     pub pic_url: Option<String>,
 }
 
-impl Default for Album {
-    fn default() -> Self {
-        Album {
-            id: 0,
-            name: String::new(),
-            pic_url: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct Song {
     pub id: i64,
     pub name: String,
@@ -36,21 +29,10 @@ pub struct Song {
     pub fee: i32,
 }
 
-impl Default for Song {
-    fn default() -> Self {
-        Song {
-            id: 0,
-            name: String::new(),
-            ar: Vec::new(),
-            al: Album::default(),
-            dt: 0,
-            fee: 0,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct Playlist {
     pub id: i64,
     pub name: String,
@@ -59,20 +41,10 @@ pub struct Playlist {
     pub cover_img_url: Option<String>,
 }
 
-impl Default for Playlist {
-    fn default() -> Self {
-        Playlist {
-            id: 0,
-            name: String::new(),
-            play_count: 0,
-            track_count: 0,
-            cover_img_url: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct PlaylistDetail {
     pub id: i64,
     pub name: String,
@@ -80,16 +52,6 @@ pub struct PlaylistDetail {
     pub cover_img_url: Option<String>,
 }
 
-impl Default for PlaylistDetail {
-    fn default() -> Self {
-        PlaylistDetail {
-            id: 0,
-            name: String::new(),
-            track_count: 0,
-            cover_img_url: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchResp {
@@ -107,6 +69,7 @@ pub struct SearchResult {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct ArtistInfo {
     pub id: i64,
     pub name: String,
@@ -115,17 +78,6 @@ pub struct ArtistInfo {
     pub album_size: i32,
 }
 
-impl Default for ArtistInfo {
-    fn default() -> Self {
-        ArtistInfo {
-            id: 0,
-            name: String::new(),
-            pic_url: None,
-            music_size: 0,
-            album_size: 0,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArtistSongsResp {
@@ -140,19 +92,12 @@ pub struct ToplistResp {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct Toplist {
     pub id: i64,
     pub name: String,
 }
 
-impl Default for Toplist {
-    fn default() -> Self {
-        Toplist {
-            id: 0,
-            name: String::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PersonalizedResp {
@@ -194,6 +139,7 @@ pub struct SongUrlResp {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct SongUrl {
     pub id: i64,
     pub url: Option<String>,
@@ -202,17 +148,6 @@ pub struct SongUrl {
     pub size: Option<i64>,
 }
 
-impl Default for SongUrl {
-    fn default() -> Self {
-        SongUrl {
-            id: 0,
-            url: None,
-            fee: None,
-            free_trial_info: None,
-            size: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Lyrics {
@@ -222,24 +157,17 @@ pub struct Lyrics {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct NewsongItem {
     pub id: i64,
     pub name: String,
     pub song: Option<RawSong>,
 }
 
-impl Default for NewsongItem {
-    fn default() -> Self {
-        NewsongItem {
-            id: 0,
-            name: String::new(),
-            song: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct RawSong {
     pub id: i64,
     pub name: String,
@@ -249,36 +177,16 @@ pub struct RawSong {
     pub fee: i32,
 }
 
-impl Default for RawSong {
-    fn default() -> Self {
-        RawSong {
-            id: 0,
-            name: String::new(),
-            artists: Vec::new(),
-            album: RawAlbum::default(),
-            duration: 0,
-            fee: 0,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct RawAlbum {
     pub id: i64,
     pub name: String,
     pub pic_url: Option<String>,
 }
 
-impl Default for RawAlbum {
-    fn default() -> Self {
-        RawAlbum {
-            id: 0,
-            name: String::new(),
-            pic_url: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NewsongResp {
@@ -292,6 +200,7 @@ pub struct AlbumNewResp {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct RecAlbum {
     pub id: i64,
     pub name: String,
@@ -301,15 +210,3 @@ pub struct RecAlbum {
     pub publish_time: Option<i64>,
 }
 
-impl Default for RecAlbum {
-    fn default() -> Self {
-        RecAlbum {
-            id: 0,
-            name: String::new(),
-            artist: None,
-            artists: Vec::new(),
-            pic_url: None,
-            publish_time: None,
-        }
-    }
-}

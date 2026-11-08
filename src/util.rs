@@ -117,8 +117,8 @@ pub fn parse_lrc(text: &str) -> Vec<(u64, String)> {
             }
             break;
         }
-        if rest.starts_with("offset:") {
-            if let Some(v) = rest["offset:".len()..].trim().parse::<i64>().ok() {
+        if let Some(v) = rest.strip_prefix("offset:") {
+            if let Ok(v) = v.trim().parse::<i64>() {
                 offset = v;
             }
             continue;

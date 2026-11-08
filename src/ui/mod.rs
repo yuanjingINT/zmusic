@@ -259,7 +259,7 @@ impl App {
             super_sel: 0,
             super_running: false,
             super_lines: Vec::new(),
-            settings: settings,
+            settings,
             settings_sel: 0,
             settings_usb: Vec::new(),
             settings_usb_loading: false,
