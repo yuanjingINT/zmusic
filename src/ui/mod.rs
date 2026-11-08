@@ -110,6 +110,8 @@ pub struct App {
     /// 音乐源注册表 + 当前搜索用的源
     registry: Arc<SourceRegistry>,
     source_id: String,
+    /// 搜索失败过的源（UI 置灰用），成功一次就清掉
+    failed_sources: std::collections::HashSet<String>,
     favorites: Favorites,
     tx: Sender<AppMsg>,
     rx: Receiver<AppMsg>,
@@ -212,6 +214,7 @@ impl App {
             player,
             downloader,
             quality,
+            failed_sources: std::collections::HashSet::new(),
             source_id: if !settings.source.is_empty()
                 && registry.get(&settings.source).is_some()
             {
@@ -565,6 +568,14 @@ impl App {
                 }
                 AppMsg::Search(r) => {
                     self.search_loading = false;
+                    match &r {
+                        Ok(_) => {
+                            self.failed_sources.remove(&self.source_id);
+                        }
+                        Err(_) => {
+                            self.failed_sources.insert(self.source_id.clone());
+                        }
+                    }
                     match r {
                         Ok(v) => {
                             self.search = v.songs;
@@ -1284,7 +1295,11 @@ impl App {
     /// 当前源的显示名 + 是否可用（缺 yt-dlp 之类就置灰）
     fn current_source(&self) -> (&'static str, bool) {
         match self.registry.get(&self.source_id) {
-            Some(s) => (s.name(), self.registry.available(&self.source_id)),
+            // 不在渲染/按键路径里探活（会卡 UI）；可用性只看最近一次搜索结果
+            Some(s) => (
+                s.name(),
+                !self.failed_sources.contains(&self.source_id),
+            ),
             None => ("未知", false),
         }
     }
