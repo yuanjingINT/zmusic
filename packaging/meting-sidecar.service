@@ -1,0 +1,16 @@
+[Unit]
+Description=Meting sidecar for zmusic (loopback only)
+Documentation=https://git.tuxai.org/personal/zmusic
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/lib/zmusic/sidecar
+Environment=METING_PORT=8123
+ExecStart=/usr/bin/node meting.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
