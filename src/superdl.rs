@@ -265,6 +265,24 @@ pub fn run_super_download<F: Fn(&str) -> (bool, String)>(
     let log = |s: String| {
         let _ = tx.send(AppMsg::SuperProgress(s));
     };
+    // 无盘/自动化场景：直接往指定目录下歌，跳过卸载与格式化（不碰任何设备）。
+    // 没有可移动盘时也能验证「取流失败不写盘」这类行为。
+    if let Some(dir) = std::env::var("ZMUSIC_SUPERDL_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        log(format!(
+            "==> ZMUSIC_SUPERDL_DIR={dir}，跳过格式化，直接写入该目录"
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let client = NetEaseSource::new(api_base.to_string());
+        let mut log2 = |s: String| {
+            let _ = tx.send(AppMsg::SuperProgress(s));
+        };
+        fill_with_music(&client, &dir, quality, 12, &mut log2);
+        let _ = tx.send(AppMsg::SuperDone(Ok("超级下载完成".to_string())));
+        return;
+    }
     log(format!(
         "==> 开始超级下载: {} ({}GB, {})",
         dev.path,
@@ -319,7 +337,7 @@ mod merge_tests {
     use std::net::TcpListener;
 
     /// 极简桩：/toplist、/playlist/track/all、/song/url/v1、/audio
-    fn stub_api() -> u16 {
+    fn stub_api(dead_url: bool) -> u16 {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         std::thread::spawn(move || {
@@ -341,6 +359,13 @@ mod merge_tests {
                     (
                         "application/json",
                         "{\"code\":200,\"songs\":[{\"id\":11,\"name\":\"测\",\"ar\":[{\"id\":1,\"name\":\"人\"}],\"al\":{\"id\":1,\"name\":\"专\"},\"dt\":180000,\"fee\":0}]}".as_bytes().to_vec(),
+                    )
+                } else if path.starts_with("/song/url/v1") && dead_url {
+                    // 404 兜底死链：url 非空但指向打不通的端口，旧实现会把它写进盘
+                    (
+                        "application/json",
+                        br#"{"data":[{"id":11,"url":"http://127.0.0.1:9/dead.mp3","code":404,"br":0,"size":0,"fee":1}]}"#
+                            .to_vec(),
                     )
                 } else if path.starts_with("/song/url/v1") {
                     (
@@ -367,7 +392,7 @@ mod merge_tests {
     /// 超级下载走的是 downloader 的共用 download_to：真下文件并逐字节比对
     #[test]
     fn super_download_lands_exact_bytes() {
-        let port = stub_api();
+        let port = stub_api(false);
         let src = crate::source::netease::NetEaseSource::new(format!("http://127.0.0.1:{port}"));
         let dir = std::env::temp_dir().join(format!("zm-superdl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -382,6 +407,31 @@ mod merge_tests {
             .find(|e| e.path().extension().map(|x| x == "mp3").unwrap_or(false))
             .expect("超级下载应该落一个 mp3");
         assert_eq!(std::fs::read(got.path()).unwrap(), b"ID3fake-audio-bytes");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 取流返回 404 死链时必须跳过该曲：既不落 .mp3，也不留 .part
+    #[test]
+    fn dead_404_link_is_skipped_without_writing() {
+        let port = stub_api(true);
+        let src = crate::source::netease::NetEaseSource::new(format!("http://127.0.0.1:{port}"));
+        let dir = std::env::temp_dir().join(format!("zm-superdl-dead-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut logs: Vec<String> = Vec::new();
+        fill_with_music(&src, dir.to_str().unwrap(), "exhigh", 1, &mut |l| {
+            logs.push(l)
+        });
+        let files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(files.is_empty(), "死链不该落盘，实际有 {files:?}");
+        assert!(
+            logs.iter().any(|l| l.contains("跳过(无播放链接)")),
+            "应该跳过并记日志，实际日志: {logs:?}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -148,6 +148,7 @@ zmusic config --print  # 只打印路径
 | `ZMUSIC_METING_URL` | `http://127.0.0.1:8123` | Meting 侧车地址（腾讯/酷狗/百度/酷我） |
 | `ZMUSIC_METING_COOKIE` | 空 | 可选。Meting 换流用的平台 cookie（建议写 config.toml `[meting] cookie`），不落盘、不进日志 |
 | `ZMUSIC_YTDLP_BIN` | `yt-dlp` | yt-dlp 可执行文件名或绝对路径 |
+| `ZMUSIC_SUPERDL_DIR` | 空 | 设了就让**超级下载**直接写这个目录，跳过选盘/卸载/格式化（无 U 盘时测功能用） |
 
 运行时会写：
 
@@ -297,6 +298,14 @@ systemctl --user restart meting-sidecar
 
 cookie 从浏览器开发者工具里复制（目标站点已登录状态下，任意请求的 `Cookie` 请求头）。
 **用自己账号的 cookie，风险自担**：它等价于该账号的登录态，别外借、别提交进仓库。
+
+#### 超级下载
+
+超级下载（菜单「设备」→ 选可移动盘）会格式化目标盘再往里灌热榜歌曲。取流失败的处理：
+`/song/url/v1` 返回的 `code!=200` 或拿不到可播流时（会员曲、无版权、第三方兜底死链），
+**跳过该曲并继续下一首**，不会写盘、也不会留下 `.part` 文件；失败的曲目在日志里标
+「跳过(无播放链接)」。设 `ZMUSIC_SUPERDL_DIR=<目录>` 可跳过格式化直接写入该目录，
+用于没有 U 盘时验证这条路径。
 
 #### 时长
 
