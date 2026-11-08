@@ -6,18 +6,18 @@ use reqwest::StatusCode;
 use std::time::Duration;
 
 #[derive(Clone)]
-pub struct ApiClient {
+pub struct NetEaseSource {
     pub base: String,
     http: Client,
 }
 
-impl ApiClient {
+impl NetEaseSource {
     pub fn new(base: String) -> Self {
         let http = Client::builder()
             .timeout(Duration::from_secs(90))
             .build()
             .unwrap();
-        ApiClient { base, http }
+        NetEaseSource { base, http }
     }
 
     fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str, params: &[(&str, &str)]) -> Result<T> {
@@ -156,5 +156,34 @@ impl ApiClient {
             .join(",");
         let r: SongUrlResp = self.get_json("song/url/v1", &[("id", &ids), ("level", level)])?;
         Ok(r.data)
+    }
+}
+
+/// 网易云对 [`crate::source::Source`] 的实现。
+///
+/// 这里只做转发：接口语义与拆出来之前完全一致（同一批端点、同样的参数）。
+impl crate::source::Source for NetEaseSource {
+    fn id(&self) -> &'static str {
+        "netease"
+    }
+
+    fn name(&self) -> &'static str {
+        "网易云音乐"
+    }
+
+    fn search(&self, keyword: &str, limit: i32, kind: i32) -> Result<SearchResult> {
+        NetEaseSource::search(self, keyword, limit, kind)
+    }
+
+    fn lyric(&self, id: i64) -> Result<Lyrics> {
+        NetEaseSource::lyric(self, id)
+    }
+
+    fn stream_url(&self, id: i64, quality: &str) -> Result<Option<String>> {
+        Ok(self
+            .song_url_v1(&[id], quality)?
+            .into_iter()
+            .next()
+            .and_then(|u| u.url))
     }
 }

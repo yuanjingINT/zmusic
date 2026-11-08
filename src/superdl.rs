@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::api::ApiClient;
+use crate::source::netease::NetEaseSource;
 use crate::models::Song;
 use crate::ui::AppMsg;
 use crate::util;
@@ -108,7 +108,7 @@ fn free_space(dir: &str) -> u64 {
     0
 }
 
-fn collect_hot_songs(client: &ApiClient, max_toplists: usize) -> Vec<Song> {
+fn collect_hot_songs(client: &NetEaseSource, max_toplists: usize) -> Vec<Song> {
     let mut seen: HashSet<i64> = HashSet::new();
     let mut all = Vec::new();
     let toplists = client.toplist().unwrap_or_default();
@@ -137,7 +137,7 @@ fn download_to(client: &reqwest::blocking::Client, url: &str, path: &Path) -> an
 }
 
 pub fn fill_with_music(
-    client: &ApiClient,
+    client: &NetEaseSource,
     dir: &str,
     quality: &str,
     max_toplists: usize,
@@ -270,7 +270,7 @@ pub fn run_super_download<F: Fn(&str) -> (bool, String)>(
         return;
     };
     log(format!("已挂载到 {}", mount));
-    let client = ApiClient::new(api_base.to_string());
+    let client = NetEaseSource::new(api_base.to_string());
     let mut log2 = |s: String| {
         let _ = tx.send(AppMsg::SuperProgress(s));
     };

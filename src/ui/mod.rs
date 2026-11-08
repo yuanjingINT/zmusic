@@ -5,7 +5,7 @@ mod playback;
 mod search_keys;
 mod theme;
 
-use crate::api::ApiClient;
+use crate::source::netease::NetEaseSource;
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::favorites::Favorites;
@@ -101,7 +101,7 @@ fn spawn<F: FnOnce() -> AppMsg + Send + 'static>(tx: Sender<AppMsg>, f: F) {
 
 pub struct App {
     cfg: Config,
-    api: ApiClient,
+    api: NetEaseSource,
     player: Player,
     downloader: Downloader,
     /// 与下载器共享的音质，弹窗里改完两边同时生效
@@ -186,7 +186,7 @@ pub struct App {
 impl App {
     pub fn new(
         cfg: Config,
-        api: ApiClient,
+        api: NetEaseSource,
         player: Player,
         downloader: Downloader,
         quality: Arc<RwLock<String>>,
