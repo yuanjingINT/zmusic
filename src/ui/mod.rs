@@ -6,6 +6,7 @@ mod search_keys;
 mod theme;
 
 use crate::source::netease::NetEaseSource;
+use crate::source::SourceRegistry;
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::favorites::Favorites;
@@ -106,6 +107,9 @@ pub struct App {
     downloader: Downloader,
     /// 与下载器共享的音质，弹窗里改完两边同时生效
     quality: Arc<RwLock<String>>,
+    /// 音乐源注册表 + 当前搜索用的源
+    registry: Arc<SourceRegistry>,
+    source_id: String,
     favorites: Favorites,
     tx: Sender<AppMsg>,
     rx: Receiver<AppMsg>,
@@ -190,6 +194,7 @@ impl App {
         player: Player,
         downloader: Downloader,
         quality: Arc<RwLock<String>>,
+        registry: Arc<SourceRegistry>,
     ) -> Self {
         let favorites = Favorites::load(&cfg.favorites_path);
         let settings = Settings::load(&cfg.settings_path);
@@ -207,6 +212,8 @@ impl App {
             player,
             downloader,
             quality,
+            registry,
+            source_id: "netease".to_string(),
             favorites,
             tx,
             rx,
@@ -1035,6 +1042,7 @@ impl App {
                 self.goto(ScreenKind::Search);
                 self.search_input_focus = true;
             }
+            KeyCode::Char('S') => self.cycle_source(),
             KeyCode::Char('g') => self.goto(ScreenKind::Downloads),
             KeyCode::Char('v') => {
                 if self.now_playing.is_some() {
@@ -1241,12 +1249,46 @@ impl App {
         // 焦点保持原状：输入栏聚焦时继续可编辑，列表聚焦时保持列表操作
         self.search_loading = true;
         let kind = crate::source::SearchKind::from_index(self.search_type);
-        let api = self.api.clone();
+        let registry = self.registry.clone();
+        let source = self.source_id.clone();
         let tx = self.tx.clone();
-        spawn(tx, move || match api.search(&q, 60, kind) {
+        spawn(tx, move || match registry.search(&source, &q, 60, kind) {
             Ok(v) => AppMsg::Search(Ok(v)),
             Err(e) => AppMsg::Search(Err(e.to_string())),
         });
+    }
+
+    /// 当前源的显示名 + 是否可用（缺 yt-dlp 之类就置灰）
+    fn current_source(&self) -> (&'static str, bool) {
+        match self.registry.get(&self.source_id) {
+            Some(s) => (s.name(), s.is_available()),
+            None => ("未知", false),
+        }
+    }
+
+    /// S 键：在已注册的源之间循环；换了源就按当前关键词重搜
+    fn cycle_source(&mut self) {
+        let ids: Vec<String> = self.registry.all().iter().map(|s| s.id().to_string()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let cur = ids.iter().position(|id| *id == self.source_id).unwrap_or(0);
+        self.source_id = ids[(cur + 1) % ids.len()].clone();
+        self.search_sel = 0;
+        self.selected.clear();
+        let (name, avail) = self.current_source();
+        self.toast = Some((
+            format!(
+                "音乐源: {}{}",
+                name,
+                if avail { "" } else { "（不可用）" }
+            ),
+            Instant::now(),
+        ));
+        let q = self.search_input.trim().to_string();
+        if !q.is_empty() {
+            self.do_search(q);
+        }
     }
 
     fn move_sel(&mut self, delta: i32) {
@@ -1468,16 +1510,22 @@ impl App {
         self.now_playing = Some(song.clone());
         self.lyric = None;
         let gen = self.play_gen;
-        let api = self.api.clone();
         let tx = self.tx.clone();
         let quality = self.cfg.quality.clone();
         let id = song.id;
+        // 按歌曲自带的 source 去找对应的源取流（混源队列靠这一步）
+        let registry = self.registry.clone();
+        let source = if song.source.is_empty() {
+            "netease".to_string()
+        } else {
+            song.source.clone()
+        };
+        let track = crate::source::track_of(&song);
         spawn(tx.clone(), move || {
-            let url = api
-                .song_url_v1(&[id], &quality)
+            let url = registry
+                .stream_url(&source, &track, &quality)
                 .ok()
-                .and_then(|v| v.into_iter().next())
-                .and_then(|u| u.url);
+                .flatten();
             AppMsg::PlayUrl(gen, url, autoplay)
         });
         let api2 = self.api.clone();

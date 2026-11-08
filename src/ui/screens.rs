@@ -438,8 +438,18 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
             .min(input_area.right().saturating_sub(1));
         f.set_cursor_position((x, input_area.y + 1));
     }
+    let (src_name, src_ok) = app.current_source();
     let types = ["0歌曲", "1歌手", "2歌单", "3专辑"];
-    let mut spans: Vec<Span> = types
+    let mut spans: Vec<Span> = Vec::with_capacity(6);
+    spans.push(Span::styled(
+        format!(" 源:{} ", src_name),
+        if src_ok {
+            theme::primary().add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            theme::dim()
+        },
+    ));
+    spans.extend(types
         .iter()
         .enumerate()
         .map(|(i, t)| {
@@ -450,7 +460,7 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
             };
             Span::styled(format!("  {} ", t), s)
         })
-        .collect();
+        .collect::<Vec<_>>());
     spans.push(Span::styled(
         if app.search_input_focus {
             "   Tab→列表 · F1-F4/Alt+数字 换类型"

@@ -153,19 +153,10 @@ pub struct SongUrl {
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Lyrics {
     pub lines: Vec<(u64, String)>,
     pub trans: Vec<(u64, String)>,
-}
-
-impl Default for Lyrics {
-    fn default() -> Self {
-        Lyrics {
-            lines: Vec::new(),
-            trans: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -80,6 +80,15 @@ pub trait Source: Send + Sync {
     fn stream_url(&self, id: &TrackId, quality: &str) -> Result<Option<String>>;
 }
 
+/// 从 `Song` 得到跨源 ID：优先用 `s_id`，老数据没有就退回数字 id。
+pub fn track_of(song: &crate::models::Song) -> TrackId {
+    if song.s_id.is_empty() {
+        TrackId(song.id.to_string())
+    } else {
+        TrackId(song.s_id.clone())
+    }
+}
+
 /// 源注册表：按 id 取源，App 以后从这儿拿。
 #[allow(dead_code)]
 pub struct SourceRegistry {
@@ -201,6 +210,15 @@ mod tests {
         assert_eq!(back.source, "youtube");
         assert_eq!(back.s_id, "dQw4w9WgXcQ");
         assert_eq!(back.name, s.name);
+    }
+
+    #[test]
+    fn track_id_falls_back_to_numeric_id() {
+        let mut song = Song::default();
+        song.id = 42;
+        assert_eq!(track_of(&song).as_str(), "42");
+        song.s_id = "dQw4w9WgXcQ".to_string();
+        assert_eq!(track_of(&song).as_str(), "dQw4w9WgXcQ");
     }
 
     #[test]
