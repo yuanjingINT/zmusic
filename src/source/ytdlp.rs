@@ -118,55 +118,10 @@ impl YtDlpSource {
         }
     }
 
-    /// 跑一条 yt-dlp 命令，带超时和输出收集。
+    /// 跑一条 yt-dlp 命令（带 self.proxy），带超时和输出收集。
     fn run(&self, args: &[&str], timeout: Duration) -> Result<String> {
-        let mut full: Vec<&str> = Vec::with_capacity(args.len() + 2);
-        if let Some(p) = &self.proxy {
-            full.push("--proxy");
-            full.push(p);
-        }
-        full.extend_from_slice(args);
-        let mut child = Command::new(&self.exe)
-            .args(&full)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| anyhow!("无法启动 {}: {}", self.exe, e))?;
-
-        // stdout 单独线程读，避免输出超过管道缓冲时子进程卡住
-        let mut stdout = child.stdout.take().expect("stdout 已 piped");
-        let reader = std::thread::spawn(move || {
-            let mut buf = String::new();
-            let _ = stdout.read_to_string(&mut buf);
-            buf
-        });
-
-        let deadline = Instant::now() + timeout;
-        let status = loop {
-            match child.try_wait()? {
-                Some(st) => break st,
-                None if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = reader.join();
-                    return Err(anyhow!("{} 超时（{}s）", self.exe, timeout.as_secs()));
-                }
-                None => std::thread::sleep(Duration::from_millis(20)),
-            }
-        };
-        let text = reader.join().unwrap_or_default();
-        if !status.success() {
-            let mut err = String::new();
-            if let Some(mut e) = child.stderr.take() {
-                let _ = e.read_to_string(&mut err);
-            }
-            let tail: String = err.lines().last().unwrap_or("").to_string();
-            return Err(anyhow!("{} 退出码 {:?}: {}", self.exe, status.code(), tail));
-        }
-        Ok(text)
+        run_cmd(&self.exe, self.proxy.as_deref(), args, timeout)
     }
-
     fn probe(&self) -> bool {
         if let Some(v) = *self.available.lock().unwrap() {
             return v;
@@ -193,6 +148,82 @@ impl YtDlpSource {
     pub fn needs_proxy_for(source: &str) -> bool {
         matches!(source, "youtube" | "soundcloud")
     }
+}
+
+/// 跑一条 yt-dlp 命令，带超时；子进程 stdout 单独线程读，避免管道缓冲卡死。
+///
+/// 抽成自由函数是因为 bilibili 这类源要自己搜（它的 web API 给标题/时长），
+/// 只在取流这一步借 yt-dlp。
+pub(crate) fn run_cmd(
+    exe: &str,
+    proxy: Option<&str>,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String> {
+    let mut full: Vec<&str> = Vec::with_capacity(args.len() + 2);
+    if let Some(p) = proxy {
+        full.push("--proxy");
+        full.push(p);
+    }
+    full.extend_from_slice(args);
+    let mut child = Command::new(exe)
+        .args(&full)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow!("无法启动 {}: {}", exe, e))?;
+
+    let mut stdout = child.stdout.take().expect("stdout 已 piped");
+    let reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stdout.read_to_string(&mut buf);
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait()? {
+            Some(st) => break st,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(anyhow!("{} 超时（{}s）", exe, timeout.as_secs()));
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    let text = reader.join().unwrap_or_default();
+    if !status.success() {
+        let mut err = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            let _ = e.read_to_string(&mut err);
+        }
+        let tail: String = err.lines().last().unwrap_or("").to_string();
+        return Err(anyhow!("{} 退出码 {:?}: {}", exe, status.code(), tail));
+    }
+    Ok(text)
+}
+
+/// 用 yt-dlp 取一个已知 URL 的直链（bilibili 等「自己搜、借 yt-dlp 取流」的源用）。
+pub(crate) fn stream_url_of(
+    exe: &str,
+    proxy: Option<&str>,
+    url: &str,
+    timeout: Duration,
+) -> Result<Option<String>> {
+    let out = run_cmd(
+        exe,
+        proxy,
+        &["-g", "-f", "bestaudio/best", "--no-warnings", url],
+        timeout,
+    )?;
+    Ok(out
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| l.starts_with("http"))
+        .map(|l| l.to_string()))
 }
 
 /// 把 yt-dlp `--dump-json` 的每行 JSON 变成 `Song`。纯函数，方便单测。
@@ -342,16 +373,7 @@ impl Source for YtDlpSource {
 
     fn stream_url(&self, id: &TrackId, _quality: &str) -> Result<Option<String>> {
         let url = self.site.item_url(id.as_str());
-        let out = self.run(
-            &["-g", "-f", "bestaudio/best", "--no-warnings", &url],
-            STREAM_TIMEOUT,
-        )?;
-        // -g 会输出一行或多行地址，取第一条 http(s)
-        Ok(out
-            .lines()
-            .map(|l| l.trim())
-            .find(|l| l.starts_with("http"))
-            .map(|l| l.to_string()))
+        stream_url_of(&self.exe, self.proxy.as_deref(), &url, STREAM_TIMEOUT)
     }
 }
 

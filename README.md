@@ -141,6 +141,7 @@ UI 据此禁用不支持的项，不靠猜。
 | 网易云 | `netease` | 国内 | 默认源，搜索/播放/歌词全通 |
 | QQ 音乐（直连） | `qq` | 国内 | 免费曲目可出流；会员曲返回「不可播放」 |
 | QQ / 酷狗 / 千千 / 酷我（Meting） | `meting:tencent` `meting:kugou` `meting:baidu` `meting:kuwo` | 国内 | 走侧车；tencent/kugou 能搜、取流需 cookie；baidu/kuwo 上游返回空壳 |
+| bilibili | `bilibili` | 国内 | 自带 web API 搜索（先取 `buvid3` 过风控），取流借 `yt-dlp`；结果是视频，标题里混切片/MV |
 | YouTube | `youtube` | 国际 | `yt-dlp`，国内需代理 |
 | SoundCloud | `soundcloud` | 国际 | `yt-dlp`，国内需代理；搜索较慢（6–7s） |
 | Audius | `audius` | 公开免费 | 搜索 + 取流可用 |

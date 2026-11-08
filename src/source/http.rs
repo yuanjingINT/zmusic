@@ -40,15 +40,30 @@ pub fn get_text(url: &str) -> Result<String> {
     Ok(resp.text()?)
 }
 
-/// "4:35" / "275" -> 毫秒
+/// "4:35" / "1:02:03" / "275" -> 毫秒；认不出来就 0
 pub fn duration_ms(s: &str) -> i64 {
     let s = s.trim();
-    if let Some((m, sec)) = s.split_once(':') {
-        if let (Ok(m), Ok(sec)) = (m.parse::<i64>(), sec.parse::<f64>()) {
-            return ((m * 60) as f64 + sec) as i64 * 1000;
-        }
-    }
-    s.parse::<f64>().map(|v| (v * 1000.0) as i64).unwrap_or(0)
+    let parts: Vec<&str> = s.split(':').collect();
+    // h:mm:ss / mm:ss / ss
+    let secs = match parts.len() {
+        3 => match (
+            parts[0].trim().parse::<i64>(),
+            parts[1].trim().parse::<i64>(),
+            parts[2].trim().parse::<f64>(),
+        ) {
+            (Ok(h), Ok(m), Ok(sec)) => Some(h as f64 * 3600.0 + m as f64 * 60.0 + sec),
+            _ => None,
+        },
+        2 => match (
+            parts[0].trim().parse::<i64>(),
+            parts[1].trim().parse::<f64>(),
+        ) {
+            (Ok(m), Ok(sec)) => Some(m as f64 * 60.0 + sec),
+            _ => None,
+        },
+        _ => s.parse::<f64>().ok(),
+    };
+    secs.map(|v| (v * 1000.0).round() as i64).unwrap_or(0)
 }
 
 /// 最小的 percent-encode（查询串用）
@@ -63,4 +78,25 @@ pub fn enc(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_mm_ss_h_mm_ss_and_bare_seconds() {
+        assert_eq!(duration_ms("4:35"), 275_000);
+        assert_eq!(duration_ms("1:02:03"), 3_723_000);
+        assert_eq!(duration_ms("275"), 275_000);
+        assert_eq!(duration_ms("246.381"), 246_381);
+        assert_eq!(duration_ms(""), 0);
+        assert_eq!(duration_ms("--:--"), 0);
+    }
+
+    #[test]
+    fn percent_encode_keeps_unreserved_bytes() {
+        assert_eq!(enc("aZ0-_.~"), "aZ0-_.~");
+        assert_eq!(enc("晴天 a"), "%E6%99%B4%E5%A4%A9%20a");
+    }
 }

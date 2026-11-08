@@ -5,6 +5,7 @@
 //! 搜索类型用枚举（不再把网易云的 1/100/1000/10 漏到上层）。
 
 pub mod audius;
+pub mod bilibili;
 pub mod ccmixter;
 pub mod http;
 pub mod jamendo;
@@ -156,6 +157,7 @@ impl SourceRegistry {
         // 国内
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
         reg.register(Arc::new(qq::QqSource::new()));
+        reg.register(Arc::new(bilibili::BilibiliSource::new()));
         for server in ["tencent", "kugou", "baidu", "kuwo"] {
             reg.register(Arc::new(meting::MetingSource::new(
                 meting_base.clone(),
@@ -239,6 +241,7 @@ mod tests {
         assert_eq!(s.name(), "网易云音乐");
         assert!(reg.get("youtube").is_some(), "YouTube 也应默认注册");
         assert!(reg.get("soundcloud").is_some(), "SoundCloud 应默认注册");
+        assert!(reg.get("bilibili").is_some(), "bilibili 应默认注册");
         assert!(reg.get("bandcamp").is_none(), "Bandcamp 无搜索入口，不注册");
         assert!(reg.get("spotify").is_none());
     }
