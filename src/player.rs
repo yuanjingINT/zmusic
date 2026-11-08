@@ -21,6 +21,9 @@ pub struct MpvState {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub enum MpvCmd {
+    /// 加载并播放（强制解暂停）：用于用户主动播放、自动连播
+    LoadPlay(String),
+    /// 只加载，保持当前暂停状态：用于手动切歌、切音质重取流
     Load(String),
     Pause(bool),
     Toggle,
@@ -104,6 +107,11 @@ impl Player {
         let _ = self.tx.send(MpvCmd::Load(url.to_string()));
     }
 
+    /// 加载并强制播放（清掉 keep-open 留下的暂停态）
+    pub fn load_play(&self, url: &str) {
+        let _ = self.tx.send(MpvCmd::LoadPlay(url.to_string()));
+    }
+
     pub fn toggle(&self) {
         let _ = self.tx.send(MpvCmd::Toggle);
     }
@@ -150,7 +158,14 @@ fn ipc_loop(mut stream: UnixStream, rx: Receiver<MpvCmd>, state: Arc<Mutex<MpvSt
                         break;
                     }
                     MpvCmd::Load(u) => {
+                        // 只 loadfile，不碰 pause：手动暂停时切歌保持暂停语义
                         let _ = send_cmd(&mut stream, &["loadfile", &u, "replace"], &mut rid);
+                    }
+                    MpvCmd::LoadPlay(u) => {
+                        let _ = send_cmd(&mut stream, &["loadfile", &u, "replace"], &mut rid);
+                        // keep-open 下播完一首会停在暂停态，自动连播只 loadfile 不会出声，
+                        // 这里显式解暂停
+                        let _ = send_cmd(&mut stream, &["set_property", "pause", "no"], &mut rid);
                     }
                     MpvCmd::Pause(b) => {
                         let _ = send_cmd(

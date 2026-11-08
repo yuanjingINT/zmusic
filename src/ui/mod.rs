@@ -89,7 +89,7 @@ pub(crate) enum AppMsg {
         resp: Sender<Result<(), String>>,
     },
     Enqueue(Result<Vec<Song>, String>),
-    PlayUrl(u64, Option<String>),
+    PlayUrl(u64, Option<String>, bool),
     Lyric(u64, Option<Lyrics>),
 }
 
@@ -508,7 +508,7 @@ impl App {
                 {
                     self.queue_idx = Some(ni);
                     self.play_gen += 1;
-                    self.play_current();
+                    self.play_current(true); // 自动连播：必须解暂停
                 }
             }
         }
@@ -639,11 +639,15 @@ impl App {
                     Ok(v) => self.enqueue_songs(v),
                     Err(e) => self.toast = Some((format!("获取歌单曲目失败: {}", e), Instant::now())),
                 },
-                AppMsg::PlayUrl(gen, url) => {
+                AppMsg::PlayUrl(gen, url, autoplay) => {
                     if gen == self.play_gen {
                         match url {
                             Some(u) => {
-                                self.player.load(&u);
+                                if autoplay {
+                                    self.player.load_play(&u);
+                                } else {
+                                    self.player.load(&u);
+                                }
                                 // 切音质重取 URL 后，尽量回到原来的位置
                                 if let Some(pos) = self.pending_seek.take() {
                                     self.player.seek_abs(pos);
@@ -1209,7 +1213,7 @@ impl App {
         }
         self.pending_seek = self.player.state().time_pos;
         self.play_gen += 1;
-        self.play_current();
+        self.play_current(false); // 切音质：播放中就继续播，暂停中就保持暂停
     }
 
     /// 查询串长度上限：长按/粘贴不会把界面卡死，也不会把 API 请求撑爆
@@ -1459,12 +1463,14 @@ impl App {
         self.queue = list;
         self.queue_idx = Some(idx);
         self.play_gen += 1;
-        self.play_current();
+        self.play_current(true); // 用户点播
         self.selected.clear();
         self.goto(ScreenKind::NowPlaying);
     }
 
-    fn play_current(&mut self) {
+    /// `autoplay = true`：加载后强制播放（自动连播／用户点播）；
+    /// `false`：只加载，保持当前暂停状态（手动切歌、切音质重取流）
+    fn play_current(&mut self, autoplay: bool) {
         let Some(idx) = self.queue_idx else { return };
         let Some(song) = self.queue.get(idx).cloned() else {
             return;
@@ -1482,7 +1488,7 @@ impl App {
                 .ok()
                 .and_then(|v| v.into_iter().next())
                 .and_then(|u| u.url);
-            AppMsg::PlayUrl(gen, url)
+            AppMsg::PlayUrl(gen, url, autoplay)
         });
         let api2 = self.api.clone();
         spawn(tx, move || {
@@ -1500,7 +1506,7 @@ impl App {
         let ni = ((cur as i32 + step).rem_euclid(n as i32)) as usize;
         self.queue_idx = Some(ni);
         self.play_gen += 1;
-        self.play_current();
+        self.play_current(false); // 手动切歌：保持原暂停状态
     }
 
     fn current_song(&self) -> Option<Song> {
