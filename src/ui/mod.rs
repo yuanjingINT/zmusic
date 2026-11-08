@@ -1894,15 +1894,16 @@ impl App {
                     // 同一首被多个源命中时全列出来，顺序也按优先级：「网易云+QQ(直连)」
                     let mut ids = list.clone();
                     ids.sort_by(|a, b| crate::source::by_source_priority(a, b));
-                    let mut labels: Vec<String> = ids
+                    let labels: Vec<String> = ids
                         .iter()
                         .map(|id| crate::source::source_display(id))
                         .collect();
-                    // 网易云付费曲目提前标出来，别等点了才知道
+                    let mut text = labels.join("+");
+                    // 网易云付费曲目提前标出来，别等点了才知道：`网易云+QQ(直连)·会员`
                     if s.source == "netease" && s.fee != 0 {
-                        labels.push("会员".to_string());
+                        text.push_str("·会员");
                     }
-                    return (labels.join("+"), can || ids.len() > 1);
+                    return (text, can || ids.len() > 1);
                 }
             }
         }
@@ -2272,40 +2273,37 @@ impl App {
         let registry = self.registry.clone();
         let proxy_cfg = self.cfg.proxy.clone();
         spawn(tx.clone(), move || {
-            let mut failures: Vec<(String, String)> = Vec::new();
-            for cand in &candidates {
+            // 按优先级逐个试，逻辑在 agg::first_playable（有单测）
+            let (hit, failures) = crate::source::agg::first_playable(&candidates, |cand| {
                 let src = if cand.source.is_empty() {
                     "netease".to_string()
                 } else {
                     cand.source.clone()
                 };
                 let track = crate::source::track_of(cand);
-                match registry.stream_url(&src, &track, &quality) {
-                    Ok(Some(u)) => {
-                        // 取到流了：mpv 的代理按真正用的那个源决定
-                        let mpv_proxy = if crate::source::ytdlp::YtDlpSource::needs_proxy_for(&src)
-                        {
+                registry
+                    .stream_url(&src, &track, &quality)
+                    .map_err(|e| e.to_string())
+            });
+            match hit {
+                Some((u, used)) => {
+                    let mpv_proxy =
+                        if crate::source::ytdlp::YtDlpSource::needs_proxy_for(&used.source) {
                             crate::proxy::mpv_proxy(proxy_cfg.as_deref()).ok().flatten()
                         } else {
                             None
                         };
-                        return AppMsg::PlayUrl(
-                            gen,
-                            Some(u),
-                            autoplay,
-                            mpv_proxy,
-                            Some((src.clone(), cand.s_id.clone())),
-                            failures,
-                        );
-                    }
-                    Ok(None) => failures.push((
-                        crate::source::source_display(&src),
-                        "需会员或无版权".to_string(),
-                    )),
-                    Err(e) => failures.push((crate::source::source_display(&src), e.to_string())),
+                    AppMsg::PlayUrl(
+                        gen,
+                        Some(u),
+                        autoplay,
+                        mpv_proxy,
+                        Some((used.source.clone(), used.s_id.clone())),
+                        failures,
+                    )
                 }
+                None => AppMsg::PlayUrl(gen, None, autoplay, None, None, failures),
             }
-            AppMsg::PlayUrl(gen, None, autoplay, None, None, failures)
         });
         let api2 = self.api.clone();
         spawn(tx, move || {

@@ -118,6 +118,28 @@ pub fn order_candidates(list: &[crate::models::Song]) -> Vec<crate::models::Song
     out
 }
 
+/// 按优先级逐个试流：返回第一个成功的 (url, 用的那条候选) 和所有失败原因。
+///
+/// `try_stream` 由调用方提供（UI 里是 `registry.stream_url`），方便单测不碰网络。
+/// 试流结果：成功的 (url, 用到的候选)；失败原因列表 (显示名, 原因)
+pub type PlayAttempt = (Option<(String, crate::models::Song)>, Vec<(String, String)>);
+
+pub fn first_playable<F>(candidates: &[crate::models::Song], mut try_stream: F) -> PlayAttempt
+where
+    F: FnMut(&crate::models::Song) -> Result<Option<String>, String>,
+{
+    let mut failures = Vec::new();
+    for cand in candidates {
+        let label = crate::source::source_display(&cand.source);
+        match try_stream(cand) {
+            Ok(Some(url)) => return (Some((url, cand.clone())), failures),
+            Ok(None) => failures.push((label, "需会员或无版权".to_string())),
+            Err(e) => failures.push((label, e)),
+        }
+    }
+    (None, failures)
+}
+
 /// 跑一次聚合搜索：每个源的结果到达就回调一次；到截止时间把没回来的记超时。
 pub fn run<F: FnMut(Part)>(
     targets: Vec<(String, Arc<dyn Source>)>,
@@ -458,6 +480,73 @@ mod tests {
                 subprocess: false,
             }),
         )
+    }
+
+    #[test]
+    fn first_playable_falls_back_to_next_source() {
+        let mk = |source: &str, s_id: &str| Song {
+            id: 0,
+            name: "晴天".into(),
+            ar: vec![Artist {
+                id: 0,
+                name: "周杰伦".into(),
+            }],
+            al: Album {
+                id: 0,
+                name: "叶惠美".into(),
+                pic_url: None,
+            },
+            dt: 1,
+            fee: 0,
+            source: source.to_string(),
+            s_id: s_id.to_string(),
+        };
+        let cands = order_candidates(&[mk("migu", "m1"), mk("netease", "n1"), mk("qq", "q1")]);
+        // 网易云会员取不到流 → 应该落到 QQ
+        let (hit, fails) = first_playable(&cands, |s| match s.source.as_str() {
+            "netease" => Ok(None),
+            "qq" => Ok(Some("http://qq/stream".to_string())),
+            _ => Ok(None),
+        });
+        let (url, used) = hit.expect("QQ 应能播");
+        assert_eq!(url, "http://qq/stream");
+        assert_eq!(used.source, "qq");
+        assert_eq!(fails.len(), 1);
+        assert_eq!(fails[0].0, "网易云");
+        assert_eq!(fails[0].1, "需会员或无版权");
+    }
+
+    #[test]
+    fn first_playable_reports_every_source_when_all_fail() {
+        let mk = |source: &str| Song {
+            id: 0,
+            name: "x".into(),
+            ar: vec![Artist {
+                id: 0,
+                name: "a".into(),
+            }],
+            al: Album {
+                id: 0,
+                name: "al".into(),
+                pic_url: None,
+            },
+            dt: 1,
+            fee: 0,
+            source: source.to_string(),
+            s_id: "1".into(),
+        };
+        let cands = order_candidates(&[mk("qq"), mk("netease"), mk("migu")]);
+        let (hit, fails) = first_playable(&cands, |s| match s.source.as_str() {
+            "netease" => Ok(None),
+            "qq" => Err("无版权".to_string()),
+            _ => Ok(None),
+        });
+        assert!(hit.is_none());
+        assert_eq!(fails.len(), 3);
+        // 顺序也按优先级：网易云 → QQ → 咪咕
+        assert_eq!(fails[0].0, "网易云");
+        assert_eq!(fails[1], ("QQ(直连)".to_string(), "无版权".to_string()));
+        assert_eq!(fails[2].0, "咪咕");
     }
 
     #[test]
