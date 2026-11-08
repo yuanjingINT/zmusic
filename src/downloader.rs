@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::Duration;
 
 const CHUNK: usize = 20;
 const WORKERS: usize = 4;
@@ -169,16 +168,14 @@ fn worker(
     shared: Arc<Mutex<DownloadState>>,
     quality: Arc<RwLock<String>>,
 ) {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .unwrap();
+    // 共享连接池：4 个 worker 共用一套连接，不再各自建 client/runtime
+    let client = crate::source::http::client();
     loop {
         let job = rx.lock().unwrap().recv();
         match job {
             Ok(job) => {
                 for song in &job.songs {
-                    process(&client, song, &job, &shared, &quality);
+                    process(client, song, &job, &shared, &quality);
                 }
             }
             Err(_) => break,
@@ -284,6 +281,7 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+    use std::time::Duration;
 
     /// 起一个只认 /song/url/v1 和 /audio.mp3 的本地桩，记录每次请求的 level
     fn stub_api(levels: Arc<Mutex<Vec<String>>>) -> String {

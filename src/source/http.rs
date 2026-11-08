@@ -10,9 +10,10 @@ pub fn client() -> &'static Client {
     static CLI: OnceLock<Client> = OnceLock::new();
     CLI.get_or_init(|| {
         Client::builder()
-            // 搜索用的客户端：连接复用拉满、建连 2s 就放弃，总超时 6s
-            // （早期 25s 会把聚合拖到截止时间之后，白等）
-            .timeout(Duration::from_secs(6))
+            // 全进程唯一的 client：搜索/取流/歌词/下载共用一套连接池
+            // （以前每个调用方自己建，一个 blocking client 就带一个 tokio runtime + 线程池）
+            // 全局 120s 给下载；搜索这类快请求在 get_json/get_text 里压到 6s
+            .timeout(Duration::from_secs(120))
             .connect_timeout(Duration::from_secs(2))
             .pool_max_idle_per_host(16)
             .tcp_nodelay(true)
@@ -25,6 +26,7 @@ pub fn client() -> &'static Client {
 pub fn get_json(url: &str) -> Result<Value> {
     let resp = client()
         .get(url)
+        .timeout(Duration::from_secs(6))
         .send()
         .with_context(|| format!("请求失败: {url}"))?;
     if !resp.status().is_success() {
@@ -37,6 +39,7 @@ pub fn get_json(url: &str) -> Result<Value> {
 pub fn get_text(url: &str) -> Result<String> {
     let resp = client()
         .get(url)
+        .timeout(Duration::from_secs(6))
         .send()
         .with_context(|| format!("请求失败: {url}"))?;
     if !resp.status().is_success() {

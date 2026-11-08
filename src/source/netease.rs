@@ -3,23 +3,17 @@ use crate::source::{SearchKind, TrackId};
 use crate::util;
 use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
-use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use std::time::Duration;
 
 #[derive(Clone)]
 pub struct NetEaseSource {
     pub base: String,
-    http: Client,
 }
 
 impl NetEaseSource {
     pub fn new(base: String) -> Self {
-        let http = Client::builder()
-            .timeout(Duration::from_secs(90))
-            .build()
-            .unwrap();
-        NetEaseSource { base, http }
+        NetEaseSource { base }
     }
 
     fn get_json<T: serde::de::DeserializeOwned>(
@@ -28,10 +22,16 @@ impl NetEaseSource {
         params: &[(&str, &str)],
     ) -> Result<T> {
         let url = format!("{}/{}", self.base, path);
-        let resp = self
-            .http
+        // 搜索是快请求（拖久了会卡住聚合），其余接口（歌单全量/歌词）给宽松一点
+        let budget = if path.starts_with("cloudsearch") {
+            6
+        } else {
+            30
+        };
+        let resp = crate::source::http::client()
             .get(&url)
             .query(params)
+            .timeout(Duration::from_secs(budget))
             .send()
             .with_context(|| format!("请求失败: {}", url))?;
         if resp.status() != StatusCode::OK {
@@ -259,7 +259,7 @@ impl crate::source::Source for NetEaseSource {
 /// - `code=200` 但码率、体积都是 0（有的源不填）→ 发一次 Range 探测再决定，
 ///   避免把「br 缺失但真能播」的歌误杀
 /// - 其它 code（404 等兜底链接）→ 同样探测一次，能取到才算可播
-fn accept_stream(u: crate::models::SongUrl) -> Option<String> {
+pub(crate) fn accept_stream(u: crate::models::SongUrl) -> Option<String> {
     let url = u.url.filter(|s| !s.is_empty())?;
     let code_ok = u.code.map(|c| c == 200).unwrap_or(true);
     let has_meta = u.br.unwrap_or(0) > 0 || u.size.unwrap_or(0) > 0;
