@@ -177,6 +177,11 @@ makepkg -s           # 需要 base-devel + openssl（PKGBUILD 已声明）
 # 产物 zmusic-<ver>-<rel>-x86_64.pkg.tar.zst，签名入库由发布脚本处理
 ```
 
+发版两条硬规矩：
+
+- **`pkgrel` 必须递增**。版本号完全相同时 pacman 不会升级，只提示“重装”，已经装过旧包的人永远拿不到新包。
+- `PKGBUILD` 的 `_commit` 要指向 GitLab 上**已推送**的 commit，并同步重算 `sha256sums`；本地没推的 commit 归档会 404。
+
 CI（`.github/workflows/build.yml`）只产出给非 Arch 用户的便携包，push / PR / tag 都跑：
 
 1. `x86_64`（ubuntu-latest）和 `aarch64`（ubuntu-24.04-arm）两个架构各编译一次
