@@ -147,8 +147,8 @@ pub struct App {
     probe_total: usize,
     probe_done: usize,
     probe_started: Option<Instant>,
-    /// 聚合结果去重集合 + 每轮失败/超时的源
-    agg_seen: std::collections::HashSet<String>,
+    /// 聚合去重：`名称+歌手` → 结果下标（代表源按优先级替换）
+    agg_index: std::collections::HashMap<String, usize>,
     agg_failed: Vec<String>,
     /// 搜索代数：切源/新搜索后旧结果直接丢
     search_gen: u64,
@@ -270,7 +270,7 @@ impl App {
             probe_total: 0,
             probe_done: 0,
             probe_started: None,
-            agg_seen: std::collections::HashSet::new(),
+            agg_index: std::collections::HashMap::new(),
             agg_failed: Vec::new(),
             search_gen: 0,
             show_all_sources: false,
@@ -685,13 +685,17 @@ impl App {
                         Ok(v) => {
                             for song in &v.songs {
                                 let key = health::dedup_key(song);
-                                let label = crate::source::source_display(&song.source);
                                 let list = self.agg_sources.entry(key).or_default();
-                                if !list.contains(&label) {
-                                    list.push(label);
+                                if !list.contains(&song.source) {
+                                    list.push(song.source.clone());
                                 }
                             }
-                            health::merge_songs(&mut self.search, &mut self.agg_seen, &v.songs);
+                            // 代表源按优先级：后到的网易云会顶掉先到的咪咕
+                            health::merge_songs_priority(
+                                &mut self.search,
+                                &mut self.agg_index,
+                                &v.songs,
+                            );
                             self.failed_sources.remove(&id);
                         }
                         Err(e) => {
@@ -706,6 +710,8 @@ impl App {
                         continue;
                     }
                     self.search_loading = false;
+                    // 全部到齐后按源优先级稳定排序（网易云在最上面）
+                    health::sort_by_priority(&mut self.search);
                     for f in failed {
                         self.agg_failed.push(f);
                     }
@@ -1666,7 +1672,7 @@ impl App {
         let gen = self.search_gen;
         self.search_loading = true;
         self.search.clear();
-        self.agg_seen.clear();
+        self.agg_index.clear();
         self.agg_sources.clear();
         self.agg_failed.clear();
         self.search_sel = 0;
@@ -1771,8 +1777,14 @@ impl App {
         if self.source_id == AGGREGATE_ID {
             if let Some(list) = self.agg_sources.get(&health::dedup_key(s)) {
                 if !list.is_empty() {
-                    // 同一首被多个源命中时全列出来：「网易云+QQ(直连)」
-                    return (list.join("+"), can || list.len() > 1);
+                    // 同一首被多个源命中时全列出来，顺序也按优先级：「网易云+QQ(直连)」
+                    let mut ids = list.clone();
+                    ids.sort_by(|a, b| crate::source::by_source_priority(a, b));
+                    let labels: Vec<String> = ids
+                        .iter()
+                        .map(|id| crate::source::source_display(id))
+                        .collect();
+                    return (labels.join("+"), can || ids.len() > 1);
                 }
             }
         }

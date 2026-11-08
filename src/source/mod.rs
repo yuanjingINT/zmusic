@@ -118,6 +118,36 @@ pub trait Source: Send + Sync {
     }
 }
 
+/// 源优先级：数字小的排前面。`S` 循环顺序、聚合结果顺序、去重代表源都按它。
+///
+/// 网易云永远是第一（用户要求），其余按「国内 → 国际 → 公开免费」，
+/// 国内内部顺序：QQ 直连 > Meting 系 > 咪咕 > bilibili。
+pub fn source_priority(id: &str) -> u8 {
+    match id {
+        "netease" => 0,
+        "qq" => 1,
+        "meting:tencent" => 2,
+        "meting:kugou" => 3,
+        "meting:baidu" => 4,
+        "meting:kuwo" => 5,
+        "migu" => 6,
+        "bilibili" => 7,
+        "youtube" => 8,
+        "soundcloud" => 9,
+        "audius" => 10,
+        "ccmixter" => 11,
+        "jamendo" => 12,
+        "wikimedia" => 13,
+        "opengameart" => 14,
+        _ => 99,
+    }
+}
+
+/// 按优先级排序两个源 id（同优先级保持原有先后）
+pub fn by_source_priority(a: &str, b: &str) -> std::cmp::Ordering {
+    source_priority(a).cmp(&source_priority(b))
+}
+
 /// 内部源 id → 给人看的名字。列表/正在播放/i 弹窗都走它，未知 id 原样返回。
 pub fn source_display(id: &str) -> String {
     match id {
@@ -185,17 +215,18 @@ impl SourceRegistry {
     /// 默认注册网易云 + YouTube（后者依赖 yt-dlp，缺了就自己标不可用）
     pub fn with_defaults(netease_base: String, proxy: Option<String>, meting_base: String) -> Self {
         let mut reg = SourceRegistry::new();
-        // 国内
+        // 注册顺序 = `S` 循环顺序 = 去重代表源的优先级：网易云钉死第一，
+        // 然后国内（QQ 直连 → Meting 系 → 咪咕 → bilibili）→ 国际 → 公开免费
         reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
         reg.register(Arc::new(qq::QqSource::new()));
-        reg.register(Arc::new(bilibili::BilibiliSource::new()));
-        reg.register(Arc::new(migu::MiguSource::new()));
         for server in ["tencent", "kugou", "baidu", "kuwo"] {
             reg.register(Arc::new(meting::MetingSource::new(
                 meting_base.clone(),
                 server,
             )));
         }
+        reg.register(Arc::new(migu::MiguSource::new()));
+        reg.register(Arc::new(bilibili::BilibiliSource::new()));
         // 国际
         // 走 yt-dlp 的一组站点（同一套逻辑按 Site 参数化）
         for site in [ytdlp::Site::YouTube, ytdlp::Site::SoundCloud] {
@@ -208,8 +239,8 @@ impl SourceRegistry {
         // 公开免费
         reg.register(Arc::new(audius::AudiusSource::new()));
         reg.register(Arc::new(ccmixter::CcMixterSource::new()));
-        reg.register(Arc::new(wikimedia::WikimediaSource::new()));
         reg.register(Arc::new(jamendo::JamendoSource::new()));
+        reg.register(Arc::new(wikimedia::WikimediaSource::new()));
         reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
         reg
     }
@@ -343,6 +374,51 @@ mod tests {
         assert_eq!(track_of(&song).as_str(), "42");
         song.s_id = "dQw4w9WgXcQ".to_string();
         assert_eq!(track_of(&song).as_str(), "dQw4w9WgXcQ");
+    }
+
+    #[test]
+    fn registry_order_puts_netease_first_and_follows_groups() {
+        let reg = SourceRegistry::with_defaults(
+            "http://127.0.0.1:3000".to_string(),
+            None,
+            "http://127.0.0.1:8123".to_string(),
+        );
+        let ids: Vec<&str> = reg.all().iter().map(|s| s.id()).collect();
+        assert_eq!(ids[0], "netease", "S 循环第一个必须是网易云");
+        // 注册顺序和优先级表一致
+        let mut sorted = ids.clone();
+        sorted.sort_by(|a, b| by_source_priority(a, b));
+        assert_eq!(ids, sorted, "注册顺序要就是优先级顺序");
+    }
+
+    #[test]
+    fn priorities_follow_the_agreed_table() {
+        let order = [
+            "netease",
+            "qq",
+            "meting:tencent",
+            "meting:kugou",
+            "migu",
+            "bilibili",
+            "youtube",
+            "soundcloud",
+            "audius",
+            "ccmixter",
+            "jamendo",
+            "wikimedia",
+            "opengameart",
+        ];
+        // 只断言相对顺序：表里还有 baidu/kuwo 两个不在 Chief 列表里的源
+        for w in order.windows(2) {
+            assert!(
+                source_priority(w[0]) < source_priority(w[1]),
+                "{} 应排在 {} 前面",
+                w[0],
+                w[1]
+            );
+        }
+        assert_eq!(source_priority("netease"), 0);
+        assert_eq!(source_priority("whatever-new"), 99);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! - 结果带 TTL（默认 10 分钟），过期回到 `Unknown`，`R` 键手动重探
 //! - 聚合搜索并发上限 4、每源 5s；超时的源记进「失败列表」，不影响其它源
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -160,20 +160,35 @@ pub fn probe_all_with<F: FnMut(String, SourceState) + Send>(
     }
 }
 
-/// 聚合结果合并：按到达顺序追加，`名称+主歌手` 去重，先到先得。
+/// 聚合结果合并：`名称+主歌手` 去重，**代表源取优先级高的那条**（后到的网易云会顶掉先到的咪咕）。
 ///
-/// `seen` 由调用方持有，便于增量合并（每到一个源的结果就合并一次，UI 不用等全部）。
-pub fn merge_songs(
+/// `index` 是 key → dst 下标的映射，由调用方持有，便于增量合并。
+pub fn merge_songs_priority(
     dst: &mut Vec<crate::models::Song>,
-    seen: &mut HashSet<String>,
+    index: &mut HashMap<String, usize>,
     part: &[crate::models::Song],
 ) {
     for s in part {
         let key = dedup_key(s);
-        if seen.insert(key) {
-            dst.push(s.clone());
+        match index.get(&key) {
+            Some(&i) => {
+                if crate::source::source_priority(&s.source)
+                    < crate::source::source_priority(&dst[i].source)
+                {
+                    dst[i] = s.clone();
+                }
+            }
+            None => {
+                index.insert(key, dst.len());
+                dst.push(s.clone());
+            }
         }
     }
+}
+
+/// 聚合结果按源优先级稳定排序：同源内保持接口返回顺序。
+pub fn sort_by_priority(songs: &mut [crate::models::Song]) {
+    songs.sort_by(|a, b| crate::source::by_source_priority(&a.source, &b.source));
 }
 
 /// 去重键：名称 + 主歌手，忽略大小写/空白/常见标点，避免 "晴天" 与 "晴天 " 各占一条
@@ -320,24 +335,43 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_first_arrival_and_dedups_by_name_and_artist() {
+    fn merge_keeps_highest_priority_representative() {
         let mut dst = Vec::new();
-        let mut seen = HashSet::new();
-        merge_songs(&mut dst, &mut seen, &[song("晴天", "周杰伦", "netease")]);
-        // 同一首（多空格/大小写不同）不再收；不同源的同名不同歌手要保留
-        merge_songs(
-            &mut dst,
-            &mut seen,
-            &[
-                song(" 晴天 ", "周杰伦", "qq"),
-                song("晴天", "关诗敏", "qq"),
-                song("Qing Tian", "Jay Chou", "youtube"),
-            ],
+        let mut index = HashMap::new();
+        // 咪咕先到
+        merge_songs_priority(&mut dst, &mut index, &[song("晴天", "周杰伦", "migu")]);
+        assert_eq!(dst[0].source, "migu");
+        // 网易云后到：优先级更高 → 顶掉代表源
+        merge_songs_priority(&mut dst, &mut index, &[song("晴天", "周杰伦", "netease")]);
+        assert_eq!(dst.len(), 1, "同一首只留一行");
+        assert_eq!(dst[0].source, "netease", "代表源取优先级高的");
+        // 低优先级的后到不顶替
+        merge_songs_priority(&mut dst, &mut index, &[song("晴天", "周杰伦", "audius")]);
+        assert_eq!(dst[0].source, "netease");
+        // 同名不同歌手各留一行
+        merge_songs_priority(&mut dst, &mut index, &[song("晴天", "关诗敏", "qq")]);
+        assert_eq!(dst.len(), 2);
+    }
+
+    #[test]
+    fn sort_puts_netease_first_and_keeps_same_source_order() {
+        let mut v = vec![
+            song("a1", "x", "audius"),
+            song("b1", "x", "bilibili"),
+            song("n1", "x", "netease"),
+            song("a2", "x", "audius"),
+            song("n2", "x", "netease"),
+            song("q1", "x", "qq"),
+        ];
+        sort_by_priority(&mut v);
+        let order: Vec<&str> = v.iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(
+            order,
+            ["netease", "netease", "qq", "bilibili", "audius", "audius"],
+            "网易云在最前，同源内保持原顺序"
         );
-        assert_eq!(dst.len(), 3);
-        assert_eq!(dst[0].source, "netease", "先到的保留");
-        assert_eq!(dst[1].ar[0].name, "关诗敏");
-        assert_eq!(dst[2].source, "youtube");
+        assert_eq!(v[0].name, "n1");
+        assert_eq!(v[1].name, "n2");
     }
 
     #[test]
