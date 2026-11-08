@@ -424,7 +424,10 @@ impl App {
             if self.quit {
                 break;
             }
-            while event::poll(Duration::from_millis(60))? {
+            // 有任务在飞（搜索/加载/取歌单）时 16ms 一拍，异步结果最多等 16ms 就上屏；
+            // 空闲或纯播放时回到 60ms 一拍，别为了这点延迟让空闲 CPU 翻三倍。
+            let tick_ms = if self.is_loading() { 16 } else { 60 };
+            while event::poll(Duration::from_millis(tick_ms))? {
                 match event::read()? {
                     Event::Key(k) => self.handle_key(k),
                     Event::Mouse(m) => self.handle_mouse(m),
@@ -618,6 +621,17 @@ impl App {
             let idx = self.settings_sel.saturating_sub(1);
             self.select_usb_for_download(idx);
         }
+    }
+
+    /// 是否有后台任务在等结果：决定事件循环的轮询粒度（16ms vs 60ms）
+    fn is_loading(&self) -> bool {
+        self.search_loading
+            || self.playlists_loading
+            || self.songs_loading
+            || self.albums_loading
+            || self.lib_loading
+            || self.super_loading
+            || self.settings_usb_loading
     }
 
     fn tick(&mut self) {
