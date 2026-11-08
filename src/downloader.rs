@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -58,6 +59,10 @@ struct Job {
 pub struct Downloader {
     shared: Arc<Mutex<DownloadState>>,
     tx: Sender<Job>,
+    quality: Arc<RwLock<String>>,
+    /// 工作线程首次入队时才建：空载时不占 4 个线程的栈和 malloc arena
+    spawned: Arc<AtomicBool>,
+    rx: Arc<Mutex<Receiver<Job>>>,
     dir: Arc<Mutex<PathBuf>>,
     base: String,
 }
@@ -67,17 +72,13 @@ impl Downloader {
         let (tx, rx) = channel();
         let shared = Arc::new(Mutex::new(DownloadState { tasks: Vec::new() }));
         let dir = Arc::new(Mutex::new(dir));
-        let rx = Arc::new(Mutex::new(rx));
-        for _ in 0..WORKERS {
-            let rx = rx.clone();
-            let sh = shared.clone();
-            let q = quality.clone();
-            thread::spawn(move || worker(rx, sh, q));
-        }
         Downloader {
             shared,
             tx,
+            spawned: Arc::new(AtomicBool::new(false)),
+            rx: Arc::new(Mutex::new(rx)),
             dir,
+            quality,
             base,
         }
     }
@@ -86,7 +87,21 @@ impl Downloader {
         *self.dir.lock().unwrap() = dir;
     }
 
+    /// 首次真正要下载时才起工作线程（空载时省掉 4 个线程的栈与分配器 arena）
+    fn ensure_workers(&self) {
+        if self.spawned.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        for _ in 0..WORKERS {
+            let rx = self.rx.clone();
+            let sh = self.shared.clone();
+            let q = self.quality.clone();
+            thread::spawn(move || worker(rx, sh, q));
+        }
+    }
+
     pub fn enqueue(&self, songs: Vec<Song>) -> usize {
+        self.ensure_workers();
         {
             let mut st = self.shared.lock().unwrap();
             let mut seen: HashSet<i64> = st.tasks.iter().map(|t| t.id).collect();
