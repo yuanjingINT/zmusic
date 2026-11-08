@@ -20,8 +20,10 @@ toml = "0.8"
 unicode-width = "0.2"
 
 [profile.release]
-opt-level = 3
-lto = "thin"
+# opt-level="z" + fat LTO：实测 3,030,096 → 2,045,808 B（-32.5%），
+# 启动中位 119.7 → 120.0ms、搜索上屏 6–11ms，都在噪声内（启动由 mpv 的 120ms 主导）
+opt-level = "z"
+lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
