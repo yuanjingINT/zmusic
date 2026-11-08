@@ -42,7 +42,7 @@ Linux x86_64 / aarch64。
 
 包在本机用 `makepkg` 构建、在 NAS 上 GPG 签名后发布到自建仓库 `repo.dito.asia`，包和数据库都用仓库密钥签名。
 
-> 当前仓库里是 **beta** 版（`0.1.1beta1`）：功能能跑，但还在连着改。beta 不会自动升到 `0.1.1` 正式版，正式版出来会自然盖上去。
+> 当前仓库里是 **beta** 版（`0.1.1beta2`）：功能能跑，但还在连着改。beta 不会自动升到 `0.1.1` 正式版，正式版出来会自然盖上去。
 
 一键安装（自动加源、导入并本地信任公钥）：
 
@@ -192,6 +192,15 @@ CI（`.github/workflows/build.yml`）只产出给非 Arch 用户的便携包，p
 2. 装 `libssl-dev` + `pkg-config`（`native-tls` 需要），`cargo build --release --locked`
 3. 用 [nfpm](https://github.com/goreleaser/nfpm) 打成 `.deb` / `.rpm` / Arch 包；`nfpm.yaml` 里 `${GOARCH}` / `${VERSION}` 由 workflow 显式注入，不靠默认值
 4. 打 tag 时自动挂到 GitHub Release（GitLab Release 用 tag + API 建，正文放 sha256 / 指纹 / 仓库地址）
+
+## 版本记录
+
+| 版本 | 变更 |
+|------|------|
+| 0.1.1beta2 | 修自动连播只切歌不出声：keep-open 下 mpv 播完停在暂停态，自动连播现在显式解暂停；手动切歌与切音质仍保持原暂停状态 |
+| 0.1.1beta1 | 底部提示按页面显示；`i` 键当前歌曲弹窗（收藏/下载/音质/播放顺序）；播完自动下一首（顺序/随机/单曲循环）；下载音质跟随运行期设置 |
+| 0.1.0-2 | 许可证改 GPL-3.0，依赖修正（`openssl` 必需、`mpv`/`nodejs` 可选），TLS 换 native-tls |
+| 0.1.0-1 | 首个公开版本 |
 
 ## 许可证
 
