@@ -616,7 +616,8 @@ impl App {
         if self.screen == kind {
             return;
         }
-        self.nav.enter(self.screen);
+        // 主菜单是根页：回菜单清栈，别把来源页压进去
+        self.nav.go(self.screen, kind);
         self.screen = kind;
         self.selected.clear();
         self.ctx_open = false;
@@ -946,8 +947,8 @@ impl App {
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc => {
-                // 出栈一层；栈空时什么都不做（不退出、不跳菜单）
-                if let Some(prev) = self.nav.leave() {
+                // 出栈一层；主菜单是根页、栈空时什么都不做（不退出、不跳菜单）
+                if let Some(prev) = self.nav.back(self.screen) {
                     self.screen = prev;
                     self.ctx_open = false;
                 }
@@ -1040,7 +1041,7 @@ impl App {
             KeyCode::Esc => {
                 // 有内容先收焦点（还能继续看结果）；空串直接回上一页
                 if self.search_input.is_empty() {
-                    if let Some(prev) = self.nav.leave() {
+                    if let Some(prev) = self.nav.back(self.screen) {
                         self.screen = prev;
                         self.search_input_focus = false;
                     }

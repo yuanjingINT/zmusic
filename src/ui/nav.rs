@@ -24,6 +24,28 @@ impl NavStack {
         self.stack.pop()
     }
 
+    /// 回根页（主菜单）：清空栈，不压栈。否则 `h` 回菜单后按 Esc 会回到刚才那页。
+    pub fn reset(&mut self) {
+        self.stack.clear();
+    }
+
+    /// 前进：目标是根页就清栈，否则压入来源页。
+    pub fn go(&mut self, from: ScreenKind, to: ScreenKind) {
+        if to == ScreenKind::Menu {
+            self.reset();
+        } else {
+            self.enter(from);
+        }
+    }
+
+    /// 后退：主菜单是根页，Esc 一律 no-op（双保险，就算栈里有残留也不动）。
+    pub fn back(&mut self, current: ScreenKind) -> Option<ScreenKind> {
+        if current == ScreenKind::Menu {
+            return None;
+        }
+        self.leave()
+    }
+
     #[cfg(test)]
     pub fn depth(&self) -> usize {
         self.stack.len()
@@ -64,6 +86,41 @@ mod tests {
         assert_eq!(nav.leave(), None);
         assert_eq!(nav.leave(), None);
         assert_eq!(nav.depth(), 0);
+    }
+
+    #[test]
+    fn going_home_clears_the_stack() {
+        let mut nav = NavStack::default();
+        nav.go(ScreenKind::Menu, ScreenKind::Search);
+        nav.go(ScreenKind::Search, ScreenKind::Albums);
+        assert_eq!(nav.depth(), 2);
+        nav.go(ScreenKind::Albums, ScreenKind::Menu);
+        assert_eq!(nav.depth(), 0);
+    }
+
+    #[test]
+    fn esc_on_menu_after_going_home_from_search_does_nothing() {
+        let mut nav = NavStack::default();
+        nav.go(ScreenKind::Menu, ScreenKind::Search);
+        nav.go(ScreenKind::Search, ScreenKind::Menu); // h 回菜单
+        assert_eq!(nav.back(ScreenKind::Menu), None);
+    }
+
+    #[test]
+    fn esc_on_menu_after_drill_then_home_does_nothing() {
+        let mut nav = NavStack::default();
+        nav.go(ScreenKind::Menu, ScreenKind::Search);
+        nav.go(ScreenKind::Search, ScreenKind::Albums);
+        nav.go(ScreenKind::Albums, ScreenKind::Menu);
+        assert_eq!(nav.back(ScreenKind::Menu), None);
+        assert_eq!(nav.depth(), 0);
+    }
+
+    #[test]
+    fn esc_on_menu_is_noop_even_with_leftover_entries() {
+        let mut nav = NavStack::default();
+        nav.enter(ScreenKind::Search);
+        assert_eq!(nav.back(ScreenKind::Menu), None);
     }
 
     #[test]
