@@ -21,8 +21,18 @@
 | 依赖 | 用途 | 是否必需 |
 |------|------|----------|
 | `mpv` | 音频播放 | 必需 |
-| `node` >= 22 | 本地网易云 API 服务（`setup.sh` 用） | 必需 |
-| `cargo` / `rustc` | 从源码构建时 | 仅构建时 |
+| `node` >= 22 | 本地网易云 API 服务（`setup.sh` 起 `ncm-api`） | 必需 |
+
+构建时（从源码编译）：
+
+| 依赖 | 用途 |
+|------|------|
+| `cargo` / `rustc`（stable，edition 2021） | 编译 |
+| C 工具链（`gcc` / `cc`） | 链接 |
+| `openssl` 头文件 + 库（Debian 系：`libssl-dev`） | `reqwest` 用 `native-tls`，经 `openssl-sys` 链接系统 OpenSSL |
+| `pkg-config` | 定位 OpenSSL |
+
+> 为什么是 `native-tls` 而不是 `rustls`：ring 0.17.14 与 gcc 16 / LLVM 21 链接失败，改用系统 OpenSSL。
 
 Linux x86_64 / aarch64。
 
@@ -30,7 +40,7 @@ Linux x86_64 / aarch64。
 
 ### Arch Linux（自建仓库，公网）
 
-包由 CI 构建，发布在自建仓库 `repo.dito.asia`，包和数据库都用仓库密钥签名。
+包在本机用 `makepkg` 构建、在 NAS 上 GPG 签名后发布到自建仓库 `repo.dito.asia`，包和数据库都用仓库密钥签名。
 
 一键安装（自动加源、导入并本地信任公钥）：
 
@@ -60,15 +70,26 @@ sudo pacman -S zmusic
 
 ### 预编译包
 
-每次打 tag，CI 会构建 x86_64 与 aarch64 的 `.deb` / `.rpm` / Arch 包，挂在 [Releases](https://github.com/yuanjingINT/zmusic/releases) 上。
+每次打 `v*` tag，CI 会构建 x86_64 与 aarch64 的 `.deb` / `.rpm` / Arch 包，挂在 [GitLab Releases](https://git.tuxai.org/personal/zmusic/-/releases)（和 [GitHub Releases](https://github.com/yuanjingINT/zmusic/releases) 镜像）上。Arch 用户优先用上面的 `dito-repo`。
 
 ### 从源码
 
+主仓库在 GitLab，GitHub 是镜像：
+
 ```bash
-git clone https://github.com/yuanjingINT/zmusic.git
+git clone https://git.tuxai.org/personal/zmusic.git
 cd zmusic
-cargo build --release
+cargo build --release --locked
 ./target/release/zmusic
+```
+
+先装构建依赖（缺 OpenSSL 头文件会报 `openssl-sys` / `Could not find openssl`）：
+
+```bash
+# Arch
+sudo pacman -S --needed base-devel openssl pkg-config
+# Debian / Ubuntu
+sudo apt install build-essential pkg-config libssl-dev
 ```
 
 ### 一键脚本
@@ -149,17 +170,19 @@ packaging/      nfpm 打包配置（deb / rpm / Arch）
 
 ## 构建与打包
 
-CI（`.github/workflows/build.yml`）在 push 和 tag 时跑：
-
-1. `x86_64`（ubuntu-latest）和 `aarch64`（ubuntu-24.04-arm）两个架构各编译一次
-2. 用 [nfpm](https://github.com/goreleaser/nfpm) 打成 `.deb` / `.rpm` / Arch 包
-3. 打 tag 时自动挂到 Release
-
-本地打 Arch 包：
+Arch 仓库里的包是本机构建、NAS 签名的，不走 CI：
 
 ```bash
-makepkg -si          # 需要 base-devel
+makepkg -s           # 需要 base-devel + openssl（PKGBUILD 已声明）
+# 产物 zmusic-<ver>-<rel>-x86_64.pkg.tar.zst，签名入库由发布脚本处理
 ```
+
+CI（`.github/workflows/build.yml`）只产出给非 Arch 用户的便携包，push / PR / tag 都跑：
+
+1. `x86_64`（ubuntu-latest）和 `aarch64`（ubuntu-24.04-arm）两个架构各编译一次
+2. 装 `libssl-dev` + `pkg-config`（`native-tls` 需要），`cargo build --release --locked`
+3. 用 [nfpm](https://github.com/goreleaser/nfpm) 打成 `.deb` / `.rpm` / Arch 包；`nfpm.yaml` 里 `${GOARCH}` / `${VERSION}` 由 workflow 显式注入，不靠默认值
+4. 打 tag 时自动挂到 GitHub Release（GitLab Release 用 tag + API 建，正文放 sha256 / 指纹 / 仓库地址）
 
 ## 许可证
 

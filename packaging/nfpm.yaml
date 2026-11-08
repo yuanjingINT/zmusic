@@ -15,5 +15,24 @@ contents:
     dst: /usr/share/licenses/zmusic/LICENSE
   - src: README.md
     dst: /usr/share/doc/zmusic/README.md
-recommends:
-  - mpv
+
+# 与 PKGBUILD 的 depends / optdepends 对齐；各包格式的库名不同，用 overrides 分别给
+overrides:
+  deb:
+    depends:
+      - libc6
+      - libssl3
+    recommends:
+      - mpv
+  rpm:
+    depends:
+      - glibc
+      - openssl-libs
+    recommends:
+      - mpv
+  archlinux:
+    depends:
+      - gcc-libs
+      - openssl
+    recommends:
+      - mpv

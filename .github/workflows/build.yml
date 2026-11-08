@@ -8,24 +8,35 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    name: build (${{ matrix.target }})
+    name: build (${{ matrix.pkgarch }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64
-            runner: ubuntu-latest
+          # goarch: nfpm 的 GOARCH（deb/rpm/arch 由 nfpm 自行映射）
+          # pkgarch: 产物文件名里用的架构名
+          # nfpm_asset: nfpm release 资产里的架构后缀
+          - pkgarch: x86_64
             goarch: amd64
-          - target: aarch64
-            runner: ubuntu-24.04-arm
+            nfpm_asset: x86_64
+            runner: ubuntu-latest
+          - pkgarch: aarch64
             goarch: arm64
+            nfpm_asset: arm64
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      - name: Build deps (native-tls -> openssl-sys)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -37,20 +48,41 @@ jobs:
         run: cargo build --release --locked
 
       - name: Package (deb / rpm / archlinux)
+        env:
+          NFPM_VERSION: 2.48.0
+          GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
-          curl -sSfL https://github.com/goreleaser/nfpm/releases/latest/download/nfpm_2.41.3_linux_${{ matrix.goarch }}.tar.gz \
+          mkdir -p dist
+
+          # nfpm 资产名形如 nfpm_2.48.0_Linux_x86_64.tar.gz（大写 Linux + x86_64/arm64）
+          curl -sSfL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${{ matrix.nfpm_asset }}.tar.gz" \
             | tar -xz -C /usr/local/bin nfpm
           nfpm -v
-          for fmt in deb rpm archlinux; do
-            nfpm package -f packaging/nfpm.yaml -p "$fmt" \
-              -t dist/zmusic_${GITHUB_REF_NAME}_${{ matrix.target }}.$fmt
-          done
+
+          # tag v0.1.0 -> 0.1.0；非 tag 构建（master/PR/manual）给可区分的开发版本
+          version="${GITHUB_REF_NAME}"
+          case "$version" in
+            v*) version="${version#v}" ;;
+          esac
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.'; then
+            version="0.0.0+dev.${GITHUB_SHA::7}"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+          nfpm package -f packaging/nfpm.yaml -p deb \
+            -t "dist/zmusic_${version}_${{ matrix.pkgarch }}.deb"
+          nfpm package -f packaging/nfpm.yaml -p rpm \
+            -t "dist/zmusic-${version}-1.${{ matrix.pkgarch }}.rpm"
+          nfpm package -f packaging/nfpm.yaml -p archlinux \
+            -t "dist/zmusic-${version}-1-${{ matrix.pkgarch }}.pkg.tar.zst"
+
+          ls -l dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zmusic-${{ matrix.target }}
+          name: zmusic-${{ matrix.pkgarch }}
           path: dist/*
           if-no-files-found: error
 
@@ -59,6 +91,8 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
