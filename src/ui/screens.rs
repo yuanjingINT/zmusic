@@ -205,10 +205,15 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
     } else {
         String::new()
     };
+    let screen_hint = if app.screen == crate::ui::ScreenKind::Search {
+        " Tab切输入/列表 F1-F4换类型"
+    } else {
+        ""
+    };
     let hints = Line::from(Span::styled(
         format!(
-            " h菜单 s搜索 v歌词 Alt+Enter选择 d下载(选中) l收藏 x移除收藏 Esc返回 n/p切歌 空格暂停 q退出{}",
-            sel_hint
+            " h菜单 s搜索 v歌词 Alt+Enter选择 d下载(选中) l收藏 x移除收藏 Esc返回 n/p切歌 空格暂停 q退出{}{}",
+            screen_hint, sel_hint
         ),
         theme::dim(),
     ));
@@ -393,21 +398,27 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
         f.set_cursor_position((x, input_area.y + 1));
     }
     let types = ["0歌曲", "1歌手", "2歌单", "3专辑"];
-    let line = Line::from(
-        types
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let s = if i == app.search_type {
-                    theme::primary().add_modifier(ratatui::style::Modifier::BOLD)
-                } else {
-                    theme::dim()
-                };
-                Span::styled(format!("  {} ", t), s)
-            })
-            .collect::<Vec<_>>(),
-    );
-    f.render_widget(Paragraph::new(line), type_area);
+    let mut spans: Vec<Span> = types
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let s = if i == app.search_type {
+                theme::primary().add_modifier(ratatui::style::Modifier::BOLD)
+            } else {
+                theme::dim()
+            };
+            Span::styled(format!("  {} ", t), s)
+        })
+        .collect();
+    spans.push(Span::styled(
+        if app.search_input_focus {
+            "   Tab→列表 · F1-F4/Alt+数字 换类型"
+        } else {
+            "   Tab→输入栏 · 直接打字即回输入 · Enter 播放所选"
+        },
+        theme::dim(),
+    ));
+    f.render_widget(Paragraph::new(Line::from(spans)), type_area);
     if app.search_loading {
         render_center(f, list_area, "搜索中...");
         return;
@@ -415,28 +426,28 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
     match app.search_type {
         0 => {
             if app.search.is_empty() {
-                render_center(f, list_area, "输入关键词回车搜索歌曲, Alt+Enter 多选, d 下载, l 收藏");
+                render_center(f, list_area, "输入关键词回车搜索歌曲；Tab 到列表；Alt+Enter 多选, d 下载, l 收藏");
                 return;
             }
             render_song_table(f, list_area, &app.search, app.search_sel, &app.selected, "搜索结果");
         }
         1 => {
             if app.search_artists.is_empty() {
-                render_center(f, list_area, "输入关键词回车搜索歌手");
+                render_center(f, list_area, "输入关键词回车搜索歌手；Tab 到列表，F2/Alt+1 换类型");
                 return;
             }
             render_artists(f, list_area, &app.search_artists, app.search_sel);
         }
         2 => {
             if app.search_playlists.is_empty() {
-                render_center(f, list_area, "输入关键词回车搜索歌单");
+                render_center(f, list_area, "输入关键词回车搜索歌单；Tab 到列表，F3/Alt+2 换类型");
                 return;
             }
             render_playlists_list(f, list_area, &app.search_playlists, app.search_sel);
         }
         3 => {
             if app.search_albums.is_empty() {
-                render_center(f, list_area, "输入关键词回车搜索专辑");
+                render_center(f, list_area, "输入关键词回车搜索专辑；Tab 到列表，F4/Alt+3 换类型");
                 return;
             }
             render_albums_list(f, list_area, &app.search_albums, app.search_sel);

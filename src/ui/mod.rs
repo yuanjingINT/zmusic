@@ -1,4 +1,5 @@
 pub mod screens;
+mod search_keys;
 mod theme;
 
 use crate::api::ApiClient;
@@ -909,10 +910,31 @@ impl App {
             }
             return;
         }
-        if self.screen == ScreenKind::Search && k.code == KeyCode::Tab {
-            self.search_input_focus = false;
-            self.set_search_type((self.search_type + 1) % 4);
-            return;
+        // 搜索页焦点两态：输入栏 / 结果列表。Tab 只切焦点，不再兼做切类型。
+        if self.screen == ScreenKind::Search {
+            match search_keys::nav(&k, self.search_input_focus) {
+                search_keys::Nav::FocusInput => {
+                    self.search_input_focus = true;
+                    return;
+                }
+                search_keys::Nav::FocusList => {
+                    self.search_input_focus = false;
+                    return;
+                }
+                search_keys::Nav::SetType(t) => {
+                    self.set_search_type(t);
+                    return;
+                }
+                search_keys::Nav::None => {}
+            }
+            // 列表聚焦时直接打字：回焦输入栏并插入，避免“打字丢字”
+            if !self.search_input_focus {
+                if let Some(c) = search_keys::printable_to_input(&k) {
+                    self.search_input_focus = true;
+                    self.search_push(c);
+                    return;
+                }
+            }
         }
         if self.screen == ScreenKind::Search && self.search_input_focus {
             self.handle_search_input(k);
@@ -1001,7 +1023,7 @@ impl App {
 
     fn handle_search_input(&mut self, k: KeyEvent) {
         match k.code {
-            KeyCode::Char(c) => self.search_input.push(c),
+            KeyCode::Char(c) => self.search_push(c),
             KeyCode::Backspace => {
                 self.search_input.pop();
             }
@@ -1013,6 +1035,15 @@ impl App {
             }
             KeyCode::Esc => self.search_input_focus = false,
             _ => {}
+        }
+    }
+
+    /// 查询串长度上限：长按/粘贴不会把界面卡死，也不会把 API 请求撑爆
+    const SEARCH_INPUT_MAX: usize = 80;
+
+    fn search_push(&mut self, c: char) {
+        if self.search_input.chars().count() < Self::SEARCH_INPUT_MAX {
+            self.search_input.push(c);
         }
     }
 
@@ -1039,7 +1070,7 @@ impl App {
     }
 
     fn do_search(&mut self, q: String) {
-        self.search_input_focus = false;
+        // 焦点保持原状：输入栏聚焦时继续可编辑，列表聚焦时保持列表操作
         self.search_loading = true;
         let stype = self.search_type_api();
         let api = self.api.clone();
