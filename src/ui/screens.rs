@@ -214,6 +214,11 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
     let mut artists_buf = String::with_capacity(64);
     let mut meta_buf = String::with_capacity(64);
     let mut spans: Vec<Span> = Vec::with_capacity(5);
+    let elapsed_ms = app.started.elapsed().as_millis() as u64;
+    let spin = crate::ui::anim::spinner(app.anim.spinner_on(), app.is_loading(), elapsed_ms);
+    if let Some(frame) = spin {
+        spans.push(Span::styled(format!(" {frame} "), theme::primary()));
+    }
     spans.push(Span::styled(
         if st.paused { " ⏸ " } else { " ▶ " },
         if st.paused {
@@ -300,12 +305,46 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
             r,
         );
     };
+    let progress = |f: &mut Frame, row: Rect| {
+        if app.anim.smooth_progress_on() {
+            let ratio = match (st.time_pos, dur) {
+                (Some(t), Some(d)) if d > 0.0 => (t / d).clamp(0.0, 1.0),
+                _ => 0.0,
+            };
+            f.render_widget(
+                Paragraph::new(smooth_progress_line(ratio, row.width as usize)),
+                row,
+            );
+        } else {
+            f.render_widget(gauge.clone(), row);
+        }
+    };
     if app.screen == crate::ui::ScreenKind::NowPlaying {
         render_hint_row(f, r2);
     } else {
-        f.render_widget(gauge, r2);
+        progress(f, r2);
         render_hint_row(f, r3);
     }
+}
+
+/// 平滑进度条：已播主题色 █、播放头 ▶、未播低对比度 ░（按 time-pos 每帧更新）
+fn smooth_progress_line(ratio: f64, width: usize) -> Line<'static> {
+    let w = width.max(8);
+    let filled = ((w as f64 * ratio.clamp(0.0, 1.0)).round() as usize).min(w.saturating_sub(1));
+    let mut played = String::with_capacity(filled);
+    for _ in 0..filled {
+        played.push('█');
+    }
+    let mut rest = String::with_capacity(w - filled);
+    rest.push('░');
+    for _ in 0..(w - filled - 1) {
+        rest.push('░');
+    }
+    Line::from(vec![
+        Span::styled(played, theme::primary()),
+        Span::styled("▶", theme::playing()),
+        Span::styled(rest, theme::dim()),
+    ])
 }
 
 fn render_center(f: &mut Frame, area: Rect, text: &str) {
@@ -1035,31 +1074,84 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         (Some(t), Some(d)) if d > 0.0 => (t / d).clamp(0.0, 1.0),
         _ => 0.0,
     };
+    let time_label = format!(
+        "{} / {}",
+        util::fmt_time(st.time_pos),
+        util::fmt_time(st.duration)
+    );
     let gauge = Gauge::default()
         .gauge_style(theme::gauge_style())
         .ratio(ratio)
-        .label(format!(
-            "{} / {}",
-            util::fmt_time(st.time_pos),
-            util::fmt_time(st.duration)
-        ));
+        .label(time_label.clone());
     let [ti, ar, ga] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
     .areas(info);
+    // 切歌淡入：Dim → 中间档 → 正常，三帧一次性
+    let fade = crate::ui::anim::fade_step(
+        app.anim.fade_on(),
+        app.fade_start.map(|t| t.elapsed().as_millis() as u64),
+    );
+    let title_style = match fade {
+        Some(crate::ui::anim::FadeStep::Dim) => theme::dim(),
+        Some(crate::ui::anim::FadeStep::Half) => theme::primary(),
+        _ => theme::song_title(),
+    };
     f.render_widget(
-        Paragraph::new(
-            Line::from(Span::styled(title, theme::song_title())).alignment(Alignment::Center),
-        ),
+        Paragraph::new(Line::from(Span::styled(title, title_style)).alignment(Alignment::Center)),
         ti,
     );
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(sub, theme::dim())).alignment(Alignment::Center)),
-        ar,
-    );
-    f.render_widget(gauge, ga);
+    // 播放中均衡器：靠 time-pos 的秒数驱动，1 秒才变一次，不另起计时器
+    let playing = !st.idle && st.time_pos.is_some();
+    let secs = st.time_pos.unwrap_or(0.0).max(0.0) as u64;
+    let bars = crate::ui::anim::eq_bars(app.anim.equalizer_on(), playing, secs, 5);
+    if bars.is_empty() {
+        f.render_widget(
+            Paragraph::new(
+                Line::from(Span::styled(sub, theme::dim())).alignment(Alignment::Center),
+            ),
+            ar,
+        );
+    } else {
+        let eq_w = (bars.len() as u16) * 2 + 2;
+        let [left, right] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(eq_w)]).areas(ar);
+        f.render_widget(
+            Paragraph::new(
+                Line::from(Span::styled(sub, theme::dim())).alignment(Alignment::Center),
+            ),
+            left,
+        );
+        f.render_widget(
+            Paragraph::new(
+                Line::from(Span::styled(
+                    format!(" {} ", bars.concat()),
+                    theme::primary(),
+                ))
+                .alignment(Alignment::Right),
+            ),
+            right,
+        );
+    }
+    if app.anim.smooth_progress_on() {
+        let label_w = (UnicodeWidthStr::width(time_label.as_str()) as u16 + 2).min(ga.width);
+        let [l, r] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(label_w)]).areas(ga);
+        f.render_widget(
+            Paragraph::new(smooth_progress_line(ratio, l.width as usize)),
+            l,
+        );
+        f.render_widget(
+            Paragraph::new(
+                Line::from(Span::styled(time_label, theme::dim())).alignment(Alignment::Right),
+            ),
+            r,
+        );
+    } else {
+        f.render_widget(gauge, ga);
+    }
     render_lyrics(f, lyric_area, app, st.time_pos);
 }
 

@@ -1,3 +1,4 @@
+pub mod anim;
 mod hints;
 mod nav;
 mod playback;
@@ -184,6 +185,10 @@ pub struct App {
     skip_streak: u32,
     /// 已经处理过的 mpv 失败序号（未播放过是 0）
     last_mpv_error: u64,
+    /// 动效开关（[ui] 段）
+    anim: crate::config::Animations,
+    /// 切歌淡入的起点
+    fade_start: Option<Instant>,
     favorites: Favorites,
     tx: Sender<AppMsg>,
     rx: Receiver<AppMsg>,
@@ -277,6 +282,7 @@ impl App {
             cfg.quality = settings.quality.clone();
         }
         let play_mode = PlayMode::parse(&settings.play_mode);
+        let anim = cfg.animations;
         // settings 里的音质可能覆盖了环境变量，共享给下载器
         *quality.write().unwrap() = cfg.quality.clone();
         let (tx, rx) = channel();
@@ -324,6 +330,8 @@ impl App {
             bad_songs: std::collections::HashSet::new(),
             skip_streak: 0,
             last_mpv_error: 0,
+            anim,
+            fade_start: None,
             source_id: if !settings.source.is_empty()
                 && (settings.source == AGGREGATE_ID || registry.get(&settings.source).is_some())
             {
@@ -429,7 +437,15 @@ impl App {
             }
             // 有任务在飞（搜索/加载/取歌单）时 16ms 一拍，异步结果最多等 16ms 就上屏；
             // 空闲或纯播放时回到 60ms 一拍，别为了这点延迟让空闲 CPU 翻三倍。
-            let tick_ms = if self.is_loading() { 16 } else { 60 };
+            let anim_on = self.anim.smooth_progress_on() || self.anim.equalizer_on();
+            let playing = self.now_playing.is_some() && !self.player.state().idle;
+            let tick_ms = if self.is_loading() {
+                16
+            } else if playing && anim_on {
+                66 // 15fps：进度/均衡器够用，也不拿 16ms 跑全屏重绘
+            } else {
+                60
+            };
             while event::poll(Duration::from_millis(tick_ms))? {
                 match event::read()? {
                     Event::Key(k) => self.handle_key(k),
@@ -627,7 +643,7 @@ impl App {
     }
 
     /// 是否有后台任务在等结果：决定事件循环的轮询粒度（16ms vs 60ms）
-    fn is_loading(&self) -> bool {
+    pub(crate) fn is_loading(&self) -> bool {
         self.search_loading
             || self.playlists_loading
             || self.songs_loading
@@ -2470,6 +2486,9 @@ impl App {
         };
         self.now_playing = Some(song.clone());
         self.lyric = None;
+        if self.anim.fade_on() {
+            self.fade_start = Some(Instant::now());
+        }
         let gen = self.play_gen;
         let tx = self.tx.clone();
         let quality = self.cfg.quality.clone();

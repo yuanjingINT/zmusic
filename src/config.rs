@@ -37,6 +37,15 @@ binary = "yt-dlp"
 # 例：proxy = "socks5h://127.0.0.1:1080"
 proxy = ""
 
+[ui]
+# 动效总开关；关掉后界面完全静止（与没有动画的版本行为一致）
+animations = true
+# 下面四个可以单独关
+spinner = true
+equalizer = true
+smooth_progress = true
+fade = true
+
 [jamendo]
 # Jamendo 免费申请的 client_id（https://devportal.jamendo.com/）
 client_id = ""
@@ -48,6 +57,58 @@ struct General {
     quality: Option<String>,
     #[serde(default)]
     download_dir: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Ui {
+    #[serde(default)]
+    animations: Option<bool>,
+    #[serde(default)]
+    spinner: Option<bool>,
+    #[serde(default)]
+    equalizer: Option<bool>,
+    #[serde(default)]
+    smooth_progress: Option<bool>,
+    #[serde(default)]
+    fade: Option<bool>,
+}
+
+/// 动效开关：总开关 + 每个动效单独开关，全部默认开。
+/// 总开关关掉时行为与「没有动画的版本」完全一致（渲染函数走静态分支）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Animations {
+    pub animations: bool,
+    pub spinner: bool,
+    pub equalizer: bool,
+    pub smooth_progress: bool,
+    pub fade: bool,
+}
+
+impl Default for Animations {
+    fn default() -> Self {
+        Animations {
+            animations: true,
+            spinner: true,
+            equalizer: true,
+            smooth_progress: true,
+            fade: true,
+        }
+    }
+}
+
+impl Animations {
+    pub fn spinner_on(&self) -> bool {
+        self.animations && self.spinner
+    }
+    pub fn equalizer_on(&self) -> bool {
+        self.animations && self.equalizer
+    }
+    pub fn smooth_progress_on(&self) -> bool {
+        self.animations && self.smooth_progress
+    }
+    pub fn fade_on(&self) -> bool {
+        self.animations && self.fade
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -90,6 +151,8 @@ struct FileConfig {
     ytdlp: YtDlp,
     #[serde(default)]
     jamendo: Jamendo,
+    #[serde(default)]
+    ui: Ui,
 }
 
 pub struct Config {
@@ -104,6 +167,8 @@ pub struct Config {
     pub config_path: PathBuf,
     pub favorites_path: PathBuf,
     pub settings_path: PathBuf,
+    /// 动效开关（`[ui]`）
+    pub animations: Animations,
 }
 
 fn non_empty(v: String) -> Option<String> {
@@ -154,6 +219,17 @@ impl Config {
                 .or_else(|| file_val.and_then(non_empty))
                 .unwrap_or_else(|| default.to_string())
         };
+        let pick_bool = |env: &dyn Fn(&str) -> Option<String>,
+                         env_key: &str,
+                         file_val: Option<bool>,
+                         default: bool|
+         -> bool {
+            match env(env_key).as_deref().map(str::trim) {
+                Some("0") | Some("false") | Some("off") | Some("no") => false,
+                Some("1") | Some("true") | Some("on") | Some("yes") => true,
+                _ => file_val.unwrap_or(default),
+            }
+        };
         let pick_opt = |env_key: &str, file_val: Option<String>| -> Option<String> {
             env(env_key)
                 .and_then(non_empty)
@@ -180,6 +256,13 @@ impl Config {
             config_path: config_dir.join("config.toml"),
             favorites_path: config_dir.join("favorites.json"),
             settings_path: config_dir.join("settings.json"),
+            animations: Animations {
+                animations: pick_bool(env, "ZMUSIC_ANIMATIONS", parsed.ui.animations, true),
+                spinner: parsed.ui.spinner.unwrap_or(true),
+                equalizer: parsed.ui.equalizer.unwrap_or(true),
+                smooth_progress: parsed.ui.smooth_progress.unwrap_or(true),
+                fade: parsed.ui.fade.unwrap_or(true),
+            },
         }
     }
 
