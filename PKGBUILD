@@ -1,16 +1,16 @@
 # Maintainer: yuanjing <yuanjing@yuanjing.art>
 pkgname=zmusic
-pkgver=0.1.1beta5
+pkgver=0.1.1
 pkgrel=1
-pkgdesc="网易云音乐终端播放器（Rust / ratatui TUI，beta）"
+pkgdesc="Terminal NetEase Cloud Music player (Rust / ratatui TUI)"
 arch=('x86_64' 'aarch64')
 url="https://git.tuxai.org/personal/zmusic"
 license=('GPL-3.0-only')
 depends=('gcc-libs' 'openssl')
 makedepends=('cargo' 'rust')
-optdepends=('mpv: 音频播放'
-            'nodejs: 网易云 API 服务与 Meting 侧车（Node >= 22）'
-            'yt-dlp: YouTube 源搜索与播放（需要代理）')
+optdepends=('mpv: audio playback'
+            'nodejs: NetEase API service and Meting sidecar (Node >= 22)'
+            'yt-dlp: YouTube source search and playback (needs a proxy)')
 
 # 源码固定到 GitLab 上**已推送**的 commit 归档（本地未推的 commit 会 404）。
 # 发版时把 _commit 换成要发的那一版，并重算 sha256sums：
