@@ -217,12 +217,10 @@ pub struct App {
     eq_hold: Option<Instant>,
     /// 上一拍的播放位置（拖动判定用）
     eq_last_pos: Option<f64>,
-    /// 这首歌的目标自动增益（dB，给界面显示「自动 +X dB」）
+    /// 这首歌的整曲自动增益（dB，给界面显示「自动 +X dB」）；None = 首次播放
     eq_auto_gain: Option<f32>,
-    /// 测速解码器：切歌时把整曲 p90 快速算出来（只算一次，最多 30 秒）
-    eq_scan: Option<crate::ui::eq::LoudScan>,
-    /// 已经为哪个流起过测速（避免超时/失败后反复重起）
-    eq_scan_url: Option<String>,
+    /// 上面那个值是按哪首歌算的（换歌才重算）
+    eq_auto_key: Option<String>,
     /// 当前这首歌里解码器是第几次启动（dump 的段号，换歌归 1）
     eq_seg: usize,
     /// 逐曲响度缓存：歌曲 key → p90 dB（存 ~/.cache/zmusic/eq_gain.json）
@@ -379,8 +377,7 @@ impl App {
             eq_hold: None,
             eq_last_pos: None,
             eq_auto_gain: None,
-            eq_scan: None,
-            eq_scan_url: None,
+            eq_auto_key: None,
             eq_seg: 0,
             eq_cache: std::collections::HashMap::new(),
             eq_cache_loaded: false,
@@ -713,7 +710,7 @@ impl App {
 
     fn tick(&mut self) {
         let st = self.player.state();
-        self.sync_autogain_scan();
+        self.sync_autogain();
         self.sync_eq(&st);
         // mpv 加载失败（403/失效链接/解码不了）必须让用户看见，并自动跳到下一首
         if st.error_seq != self.last_mpv_error {
@@ -792,81 +789,49 @@ impl App {
             .map(|s| format!("{}|{}", s.source, s.s_id))
     }
 
-    /// 测速解码的进度（0..1）：界面拿去显示「测速 x%」
-    fn scan_progress(&self) -> Option<f32> {
-        let scan = self.eq_scan.as_ref()?;
-        let total = self
-            .now_playing
-            .as_ref()
-            .and_then(|_| self.player.state().duration)
-            .unwrap_or(0.0);
-        if total <= 1.0 {
-            return None;
-        }
-        Some((scan.secs() / total).clamp(0.0, 0.99) as f32)
-    }
-
-    /// 逐曲自动增益：切歌时另起一个测速解码器算整曲 p90，播完前只算一次。
+    /// 逐曲自动增益：整首一个值，歌内绝不改。
     ///
-    /// - 缓存命中：直接用，不跑测速（省掉那一次额外下载），第一秒就到位
-    /// - 首次播放：固定增益起步 → 测速跑完（≤30 秒）→ 4 秒斜坡到目标 → 整首不再变
-    /// - 测速失败/超时：保持固定增益，到这首歌结束都不再试
-    fn sync_autogain_scan(&mut self) {
+    /// - 缓存里听过（第二遍起）：直接用整曲标定，第一秒就到位、整首恒定
+    /// - 首次播放：用固定增益（eq_gain 那套映射）——稳定但未必最优；
+    ///   解码流顺手攒窗峰值，播到 80% 时算出整曲 p90 写进缓存，下一遍就准了
+    ///
+    /// 全程零额外下载：就是用波形那条本来就在跑的 1x 解码流。
+    fn sync_autogain(&mut self) {
         if !self.anim.eq_autogain {
-            self.eq_scan = None;
             self.eq_auto_gain = None;
+            self.eq_auto_key = None;
             return;
         }
-        let Some(url) = self.now_url.clone() else {
+        let Some(key) = self.eq_cache_key() else {
             return;
         };
-        // 换歌/换流：旧测速作废
-        if self.eq_scan.as_ref().map(|s| s.url() != url).unwrap_or(false) {
-            self.eq_scan = None;
-            self.eq_scan_url = None;
-            self.eq_auto_gain = None;
+        if self.eq_auto_key.as_deref() != Some(key.as_str()) {
+            self.eq_auto_key = Some(key.clone());
+            self.ensure_eq_cache();
+            self.eq_auto_gain = self
+                .eq_cache
+                .get(&key)
+                .copied()
+                .map(crate::ui::eq::autogain_from_p90);
         }
-        if let Some(scan) = self.eq_scan.as_ref() {
-            if let Some(p90) = scan.result() {
-                let gain = crate::ui::eq::autogain_from_p90(p90);
-                let secs = scan.elapsed().as_secs_f32();
-                eprintln!("[zmusic] 测速解码完成：{:.1}s p90 {:.1} dBFS → 自动增益 {:+.1} dB", secs, p90, gain);
-                if let Some(key) = self.eq_cache_key() {
-                    self.eq_cache.insert(key, p90);
-                    self.save_eq_cache();
-                }
-                self.eq_auto_gain = Some(gain);
-                if let Some(a) = self.eq_analyzer.as_ref() {
-                    a.set_target(gain);
-                }
-                self.eq_scan = None;
+        self.absorb_eq_estimate();
+    }
+
+    /// 首次播放攒够 80% 后，把整曲 p90 写进缓存（同一首只写一次）
+    fn absorb_eq_estimate(&mut self) {
+        let Some(p90) = self.eq_analyzer.as_ref().and_then(|a| a.estimated_p90()) else {
+            return;
+        };
+        let Some(key) = self.eq_cache_key() else {
+            return;
+        };
+        if let Some(old) = self.eq_cache.get(&key) {
+            if (old - p90).abs() < 0.5 {
                 return;
             }
-            if scan.elapsed() > std::time::Duration::from_secs(30) {
-                eprintln!("[zmusic] 测速解码超时（30s），保持固定增益");
-                self.eq_scan = None;
-                self.eq_scan_url = Some(url);
-            }
-            return;
         }
-        // 没在测速：先看缓存
-        let key = self.eq_cache_key();
-        if let Some(p90) = key.as_ref().and_then(|k| self.eq_cache.get(k).copied()) {
-            let gain = crate::ui::eq::autogain_from_p90(p90);
-            if self.eq_auto_gain != Some(gain) {
-                self.eq_auto_gain = Some(gain);
-                if let Some(a) = self.eq_analyzer.as_ref() {
-                    a.set_target(gain);
-                }
-            }
-            return;
-        }
-        // 首次播放：这一首只起一次测速
-        if self.eq_scan_url.as_deref() != Some(url.as_str()) {
-            self.eq_scan_url = Some(url.clone());
-            self.eq_auto_gain = None;
-            self.eq_scan = crate::ui::eq::LoudScan::start(&url);
-        }
+        self.eq_cache.insert(key, p90);
+        self.save_eq_cache();
     }
 
     fn sync_eq(&mut self, st: &crate::player::MpvState) {
@@ -929,14 +894,22 @@ impl App {
             soft_clip: self.anim.eq_soft_clip,
             autogain: self.anim.eq_autogain,
         };
-        // 目标增益：缓存命中/测速已完成就直接带着走（第一秒就到位）
+        // 整曲标定：缓存命中就直接带着走（第一秒就到位），否则固定增益起步
         let target = self.eq_auto_gain;
+        // 整首时长：mpv 还没报就用搜索结果里的时长（判断「播到 80%」写缓存要用）
+        let duration = st.duration.or_else(|| {
+            self.now_playing
+                .as_ref()
+                .map(|s| s.dt as f64 / 1000.0)
+                .filter(|d| *d > 1.0)
+        });
         self.eq_seg += 1;
         match crate::ui::eq::PcmAnalyzer::start(
             &url,
             st.time_pos.unwrap_or(0.0),
             wave_cfg,
             target,
+            duration,
             self.eq_seg,
         ) {
             Some(a) => self.eq_analyzer = Some(a),
@@ -1286,8 +1259,7 @@ impl App {
                                 // 换了一首（或同一首换了源）：重新做逐曲响度测速
                                 if self.now_url.as_deref() != Some(u.as_str()) {
                                     self.eq_auto_gain = None;
-                                    self.eq_scan = None;
-                                    self.eq_scan_url = None;
+                                    self.eq_auto_key = None;
                                 }
                                 self.now_url = Some(u.clone());
                                 // 换源成功：把队列/正在播放这首歌的条目改成真正用的源，

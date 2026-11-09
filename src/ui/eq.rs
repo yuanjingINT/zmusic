@@ -333,8 +333,10 @@ const AUTO_TARGET_POST_DB: f32 = -SPAN_DB + SPAN_DB * AUTO_TARGET_LEVEL / 9.0;
 const GAIN_MIN_DB: f32 = -12.0;
 const GAIN_MAX_DB: f32 = 6.0;
 
-/// 测速解码出结果后，用多少秒斜坡过渡到目标增益
-const RAMP_SECS: f32 = 4.0;
+/// 攒窗峰值算整曲 p90 的上限（约 10 分钟，防长播内存涨）
+const CACHE_MAX_WINDOWS: usize = 20000;
+/// 播到这个比例就把整曲 p90 写进缓存（第一遍听够用，不用等整首）
+const CACHE_AT_FRACTION: f64 = 0.8;
 
 /// 手动模式的基准下漂速度（dB/秒）
 const WAVE_REF_DECAY_DB_PER_S: f32 = 0.1;
@@ -352,27 +354,28 @@ pub fn autogain_from_p90(p90_db: f32) -> f32 {
 
 /// 波形幅度与自动增益。
 ///
-/// 增益**不在歌内估**：切歌时另起一个「测速解码器」把整曲 p90 算出来（见 [`LoudScan`]），
-/// 算完之前用固定增益（`eq_gain` 那套映射），算完用 4 秒斜坡过渡过去，之后整首不动。
-/// 这样「一首歌里别晃」和「副歌一到就到位」不再冲突——代价是每首歌第一次听时，
-/// 中途会有一次可见的升降。
+/// **歌内绝不改增益**：一首歌从头到尾一个值，不会忽大忽小。
+/// - 缓存命中（听过一次）：直接用整曲标定，第一秒就到位
+/// - 首次播放：用固定增益（`eq_gain` 那套映射）——稳定但未必最优；
+///   同时顺手把每个窗的峰值攒起来（复用这条 1x 解码流，零额外流量），
+///   播到 80% 时算出整曲 p90 交给界面写缓存，下一遍起就准了。
 struct WaveAgc {
-    /// 目标自动增益（dB）：测速解码/缓存给的；None = 还没算出来，用固定增益
+    /// 目标自动增益（dB）：缓存里这首歌的标定；None = 首次播放，用固定增益
     target_db: Option<f32>,
-    /// 斜坡起点：`(歌曲内已播秒数, 起点 dB)`
-    ramp_at: Option<(f32, f32)>,
     /// 用户倍率（固定增益那套映射的放大倍数）
     user_gain: f32,
     soft_clip: bool,
     autogain: bool,
     /// 手动模式的天花板（dBFS）
     ceiling_db: f32,
-    /// 这首歌已经播了多少秒
+    /// 这首歌已经播了多少秒（解码侧，从起解码器算）
     played: f32,
+    /// 每个 32ms 窗的峰值（dB）：只为算整曲 p90 写缓存，不参与当前这首的显示
+    peaks: Vec<f32>,
 }
 
 impl WaveAgc {
-    /// `target_db`：缓存命中就直接给目标增益（第一秒就到位）；None = 首次播放，等测速
+    /// `target_db`：缓存命中就直接给整曲标定（第一秒就到位）；None = 首次播放
     fn new(cfg: WaveCfg, target_db: Option<f32>) -> Self {
         let ceiling = if cfg.reference_dbfs.is_finite() {
             cfg.reference_dbfs.clamp(-60.0, -3.0)
@@ -381,27 +384,22 @@ impl WaveAgc {
         };
         WaveAgc {
             target_db: target_db.filter(|g| g.is_finite()),
-            ramp_at: None,
             user_gain: cfg.gain.clamp(0.1, 8.0),
             soft_clip: cfg.soft_clip,
             autogain: cfg.autogain,
             ceiling_db: ceiling,
             played: 0.0,
+            peaks: Vec::with_capacity(4096),
         }
-    }
-
-    /// 测速解码回来：从当前增益起，用 4 秒斜坡走到目标（只发生一次）
-    fn set_target(&mut self, gain_db: f32) {
-        if !self.autogain || self.target_db.is_some() {
-            return;
-        }
-        let from = self.fixed_equiv_db();
-        self.target_db = Some(gain_db.clamp(GAIN_MIN_DB, GAIN_MAX_DB));
-        self.ramp_at = Some((self.played, from));
     }
 
     fn observe(&mut self, peak_db: f32, dt_s: f32) {
         self.played += dt_s;
+        if self.autogain && self.target_db.is_none() && self.peaks.len() < CACHE_MAX_WINDOWS {
+            // 首次播放：顺手攒窗峰值，播到 80% 时算整曲 p90 写缓存。
+            // 只攒不用——当前这首歌的增益从头到尾不变。
+            self.peaks.push(peak_db);
+        }
         if self.autogain {
             return;
         }
@@ -414,46 +412,34 @@ impl WaveAgc {
         }
     }
 
-    /// 固定增益那套映射折合成 dB（和自动增益同一把尺子，只为显示/记录）
+    /// 固定增益那套映射折合成 dB（和自动增益同一把尺子，仅为显示/记录）
     fn fixed_equiv_db(&self) -> f32 {
         -self.ceiling_db + 20.0 * self.user_gain.max(1e-6).log10()
     }
 
-    /// 0 = 固定增益映射，1 = 自动增益映射
-    fn blend(&self) -> f32 {
-        match (self.target_db, self.ramp_at) {
-            (None, _) => 0.0,
-            (Some(_), None) => 1.0,
-            (Some(_), Some((at, _))) => ((self.played - at) / RAMP_SECS).clamp(0.0, 1.0),
-        }
-    }
-
-    /// 当前生效的自动增益（dB）：固定阶段报等价 dB，斜坡内线性插值
+    /// 当前生效的增益（dB）：标定优先，没有就用固定映射的折合值
     fn effective_gain_db(&self) -> f32 {
-        match (self.target_db, self.ramp_at) {
-            (None, _) => {
-                if self.autogain { self.fixed_equiv_db() } else { 0.0 }
-            }
-            (Some(t), None) => t,
-            (Some(t), Some((at, from))) => {
-                let b = ((self.played - at) / RAMP_SECS).clamp(0.0, 1.0);
-                from + (t - from) * b
+        match self.target_db {
+            Some(t) => t,
+            None => {
+                if self.autogain {
+                    self.fixed_equiv_db()
+                } else {
+                    0.0
+                }
             }
         }
     }
 
-    /// 自动增益给这首歌加了多少 dB（固定增益阶段报 0，别闪一个假的数）
+    /// 自动增益给这首歌调了多少 dB（首次播放没标定，报 0）
     fn auto_gain_db(&self) -> f32 {
         if !self.autogain {
             return 0.0;
         }
-        match self.target_db {
-            None => 0.0,
-            Some(_) => self.effective_gain_db(),
-        }
+        self.target_db.unwrap_or(0.0)
     }
 
-    /// 当前 p90（dB）：已经知道目标就反推，不知道就按固定映射折合
+    /// 当前 p90（dB）：有标定就反推，没有就按固定映射折合
     fn p90_db(&self) -> f32 {
         AUTO_TARGET_POST_DB - self.effective_gain_db()
     }
@@ -463,6 +449,11 @@ impl WaveAgc {
         self.autogain && self.target_db.is_some()
     }
 
+    /// 攒下来的整曲 p90（首次播放到 80% 才取，写缓存用）
+    fn whole_p90(&self) -> Option<f32> {
+        p90_of(self.peaks.clone())
+    }
+
     fn peak_db(peak: f32) -> f32 {
         20.0 * peak.max(1e-9).log10()
     }
@@ -470,17 +461,12 @@ impl WaveAgc {
     /// 归一化前的幅度（1.0 = 顶到天花板，可大于 1）。平顶标志用它。
     fn x_pre(&self, peak: f32) -> f32 {
         let p = Self::peak_db(peak);
-        let man = ((p - self.ceiling_db + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0) * self.user_gain;
-        if !self.autogain {
-            return man;
+        match self.target_db {
+            Some(_) if self.autogain => {
+                ((p + self.effective_gain_db() + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0)
+            }
+            _ => ((p - self.ceiling_db + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0) * self.user_gain,
         }
-        let b = self.blend();
-        if b <= 0.0 {
-            return man;
-        }
-        let g = self.effective_gain_db();
-        let auto = ((p + g + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0);
-        man * (1.0 - b) + auto * b
     }
 
     fn amp(&self, peak: f32) -> f32 {
@@ -495,28 +481,6 @@ impl WaveAgc {
     }
 }
 
-/// 「测速解码器」：另起一个 mpv 把整首快速解一遍，只为算出**整曲 p90**。
-///
-/// 不参与播放、不参与波形；`--speed=8` 封顶，尽量 30 秒内跑完。
-/// 这一路会**多下载一次音频**（约等于整首文件大小），界面上要如实显示进度，
-/// 不能偷偷花用户流量。
-pub struct LoudScan {
-    child: Child,
-    fifo: PathBuf,
-    stop: Arc<Mutex<bool>>,
-    state: Arc<Mutex<ScanState>>,
-    started: std::time::Instant,
-    url: String,
-}
-
-#[derive(Default, Clone, Copy)]
-struct ScanState {
-    /// 已经解出来的秒数（进度用）
-    secs: f64,
-    /// 算完了就是整曲 p90（dBFS）
-    p90: Option<f32>,
-}
-
 /// 90 分位（和 WaveAgc 里的口径完全一致）
 fn p90_of(mut v: Vec<f32>) -> Option<f32> {
     if v.is_empty() {
@@ -525,103 +489,6 @@ fn p90_of(mut v: Vec<f32>) -> Option<f32> {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let idx = ((v.len() as f32 * 0.9) as usize).min(v.len() - 1);
     Some(v[idx])
-}
-
-impl LoudScan {
-    pub fn start(url: &str) -> Option<LoudScan> {
-        let dir = eq_dir();
-        let _ = std::fs::create_dir_all(&dir);
-        sweep_stale(&dir);
-        let fifo = dir.join(format!("eq-scan-{}.pcm", std::process::id()));
-        let _ = std::fs::remove_file(&fifo);
-        if !Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            return None;
-        }
-        // --speed=8：封顶 8 倍速，别为了算个响度把带宽吃满
-        let child = Command::new("mpv")
-            .args([
-                "--no-video",
-                "--no-terminal",
-                "--really-quiet",
-                "--ao=pcm",
-                &format!("--ao-pcm-file={}", fifo.display()),
-                "--audio-format=s16",
-                &format!("--audio-samplerate={}", SAMPLE_RATE as u32),
-                "--audio-channels=mono",
-                "--speed=8",
-                url,
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-
-        let state = Arc::new(Mutex::new(ScanState::default()));
-        let stop = Arc::new(Mutex::new(false));
-        let path = fifo.clone();
-        let st = state.clone();
-        let stop_thread = stop.clone();
-        std::thread::spawn(move || {
-            let Ok(mut f) = std::fs::File::open(&path) else {
-                return;
-            };
-            let _ = std::fs::remove_file(&path);
-            let mut buf = vec![0u8; WINDOW * 2];
-            let mut peaks: Vec<f32> = Vec::with_capacity(16384);
-            while !*stop_thread.lock().unwrap() {
-                if f.read_exact(&mut buf).is_err() {
-                    break;
-                }
-                let mut peak = 0.0f32;
-                for c in buf.as_chunks::<2>().0.iter().take(WINDOW) {
-                    let v = i16::from_le_bytes(*c) as f32 / 32768.0;
-                    peak = peak.max(v.abs());
-                }
-                peaks.push(20.0 * peak.max(1e-9).log10());
-                let mut s = st.lock().unwrap();
-                s.secs = peaks.len() as f64 * WINDOW as f64 / SAMPLE_RATE;
-            }
-            let p90 = p90_of(peaks);
-            st.lock().unwrap().p90 = p90;
-        });
-        Some(LoudScan {
-            child,
-            fifo,
-            stop,
-            state,
-            started: std::time::Instant::now(),
-            url: url.to_string(),
-        })
-    }
-
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-    pub fn secs(&self) -> f64 {
-        self.state.lock().unwrap().secs
-    }
-    /// 算完了就是整曲 p90，没算完是 None
-    pub fn result(&self) -> Option<f32> {
-        self.state.lock().unwrap().p90
-    }
-    pub fn elapsed(&self) -> std::time::Duration {
-        self.started.elapsed()
-    }
-}
-
-impl Drop for LoudScan {
-    fn drop(&mut self) {
-        *self.stop.lock().unwrap() = true;
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.fifo);
-    }
 }
 
 pub struct PcmAnalyzer {
@@ -636,21 +503,22 @@ pub struct PcmAnalyzer {
     url: String,
     /// 当前自动增益（dB），给界面显示
     auto_gain_db: Arc<Mutex<f32>>,
-    /// 目标增益（dB）：测速解码回来由界面填进来，4 秒斜坡过渡
-    target: Arc<Mutex<Option<f32>>>,
+    /// 播到 80% 时算出的整曲 p90（dBFS）：界面拿去写缓存，下次直接命中
+    est_p90: Arc<Mutex<Option<f32>>>,
     /// 读线程用的结束旗标（Drop 时置位，避免线程卡在阻塞读上）
     stop: Arc<Mutex<bool>>,
 }
 
 impl PcmAnalyzer {
     /// 起解码进程。`start_secs` 用来和播放器对齐（从当前播放位置开始解）。
-    /// `target_db`：这首歌的目标自动增益（缓存命中时有值，第一秒就到位）；
-    /// None = 首次播放，固定增益起步，等 [`LoudScan`] 算完再由界面灌进来。
+    /// `target_db`：缓存里这首歌的整曲标定；None = 首次播放，用固定增益。
+    /// `duration`：整首时长（秒），用来判断「播到 80%」写不写缓存。
     pub fn start(
         url: &str,
         start_secs: f64,
         wave_cfg: WaveCfg,
         target_db: Option<f32>,
+        duration: Option<f64>,
         seg_no: usize,
     ) -> Option<PcmAnalyzer> {
         let dir = eq_dir();
@@ -688,13 +556,13 @@ impl PcmAnalyzer {
 
         let wave = Arc::new(Mutex::new(WaveBuf::default()));
         let auto_gain_db = Arc::new(Mutex::new(0.0f32));
-        let target: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(target_db));
+        let est_p90: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
         // 段号由界面给：同一首歌内从 1 开始，重启一次 +1（换歌重新从 1 数）
         let stop = Arc::new(Mutex::new(false));
         {
             let wave = wave.clone();
             let auto_gain_cell = auto_gain_db.clone();
-            let target_cell = target.clone();
+            let est_cell = est_p90.clone();
             let stop = stop.clone();
             let path = fifo.clone();
             std::thread::spawn(move || {
@@ -737,17 +605,13 @@ impl PcmAnalyzer {
                         .iter()
                         .map(|x| (*x as f32 / 32768.0).abs())
                         .fold(0.0f32, f32::max);
-                    // 界面测速回来会把目标灌进这个单元：读到就起一次 4 秒斜坡
-                    if let Some(g) = *target_cell.lock().unwrap() {
-                        wagc.set_target(g);
-                    }
                     wagc.observe(
                         20.0 * peak.max(1e-9).log10(),
                         WINDOW as f32 / SAMPLE_RATE as f32,
                     );
                     if let Some(f) = dump.as_mut() {
                         use std::io::Write;
-                        // 列：1 秒 2 原始dB 3 level(0..9) 4 自动增益dB 5 p90dB 6 段号 7 平顶
+                        // 列：1 秒 2 原始dB 3 level(0..9) 4 自动增益dB 5 p90dB 6 段号 7 平顶 8 生效增益dB
                         let level = wagc.amp(peak) * 9.0;
                         let p90 = wagc.p90_db();
                         // 平顶 = 归一化前已经到/超天花板（1.0 = 正好顶到）
@@ -758,15 +622,38 @@ impl PcmAnalyzer {
                         };
                         let _ = writeln!(
                             f,
-                            "{:.3},{:.2},{:.2},{:.1},{:.2},{},{}",
+                            "{:.3},{:.2},{:.2},{:.1},{:.2},{},{},{}",
                             now as f64 / 1000.0,
                             20.0 * peak.max(1e-9).log10(),
                             level,
                             wagc.auto_gain_db(),
                             p90,
                             seg_no,
-                            flat
+                            flat,
+                            wagc.effective_gain_db()
                         );
+                    }
+                    // 首次播放播到 80% 就把整曲 p90 交出去写缓存，之后这一首不再重算。
+                    // 注意用「本次解码累计时长」而不是播放位置：解码器中途重启（拖动、
+                    // 播完 EOF）时新实例只解了几个窗，拿位置判断会立刻误发布。
+                    // 前 0.5 秒是解码启动瞬态（首窗常是满刻度），不算进 p90。
+                    if wagc.played >= 0.5
+                        && !wagc.peaks.is_empty()
+                        && est_cell.lock().unwrap().is_none()
+                    {
+                        let enough = match duration {
+                            Some(d) if d > 1.0 => wagc.played as f64 >= d * CACHE_AT_FRACTION,
+                            _ => wagc.played >= 180.0,
+                        };
+                        if enough {
+                            if let Some(p90) = wagc.whole_p90() {
+                                *est_cell.lock().unwrap() = Some(p90);
+                                eprintln!(
+                                    "[zmusic] 整曲响度已缓存：p90 {:.1} dBFS（解码 {:.0}s）",
+                                    p90, wagc.played
+                                );
+                            }
+                        }
                     }
                     *gain_cell.lock().unwrap() = wagc.auto_gain_db();
                     {
@@ -796,14 +683,9 @@ impl PcmAnalyzer {
             wave,
             url: url.to_string(),
             auto_gain_db,
-            target,
+            est_p90,
             stop,
         })
-    }
-
-    /// 测速解码算出目标增益后灌进来：解码线程下一窗就会起 4 秒斜坡
-    pub fn set_target(&self, gain_db: f32) {
-        *self.target.lock().unwrap() = Some(gain_db);
     }
 
     /// 这个解码器用的流地址
@@ -816,9 +698,9 @@ impl PcmAnalyzer {
         *self.auto_gain_db.lock().unwrap()
     }
 
-    /// 是否已经拿到整曲标定（缓存命中或测速跑完）
-    pub fn calibrated(&self) -> bool {
-        self.target.lock().unwrap().is_some()
+    /// 首次播放攒够 80% 后算出的整曲 p90（dBFS）：界面拿去写缓存
+    pub fn estimated_p90(&self) -> Option<f32> {
+        *self.est_p90.lock().unwrap()
     }
 
     /// 最近 `max` 个波形样本 + 单调序号（界面据此只取新增的部分）
@@ -931,48 +813,54 @@ mod tests {
         assert!((autogain_from_p90(-8.0) - 1.3333).abs() < 0.001);
     }
 
-    /// 目标来得晚：4 秒斜坡过渡一次，之后整首不动（这是新方案的核心）
+    /// 首次播放：整首增益恒定（不晃），同时把窗峰值攒下来给缓存用
     #[test]
-    fn autogain_ramps_once_then_holds() {
+    fn first_play_holds_one_gain_and_collects_peaks() {
         let cfg = WaveCfg {
             autogain: true,
             soft_clip: true,
-            gain: 1.0,
+            gain: 1.6,
             reference_dbfs: -6.0,
         };
         let mut agc = WaveAgc::new(cfg, None);
-        // 固定增益阶段：还没目标，自动增益报 0，波形按 eq_gain 那套画
-        for _ in 0..300 {
-            agc.observe(-10.0, 0.032);
-        }
-        assert_eq!(agc.auto_gain_db(), 0.0);
         assert!(!agc.calibrated());
-
-        // 测速回来：从固定增益折合值斜坡到 +2.0
-        let from = agc.fixed_equiv_db();
-        let before = agc.amp(0.1);
-        agc.set_target(2.0);
-        assert!(agc.calibrated());
-        // 斜坡刚开始：几乎还是固定增益那套
-        assert!((agc.amp(0.1) - before).abs() < 0.02, "斜坡起点不该跳");
-        assert!((agc.auto_gain_db() - from).abs() < 0.5);
-
-        // 2 秒后走了一半左右
-        for _ in 0..63 {
-            agc.observe(-10.0, 0.032);
-        }
-        let mid = agc.auto_gain_db();
-        assert!(mid < from && mid > 2.0, "斜坡中间应在 {from} 与 2.0 之间: {mid}");
-
-        // 4 秒后到位，之后一直不动
-        for _ in 0..200 {
-            agc.observe(-10.0, 0.032);
-        }
-        assert!((agc.auto_gain_db() - 2.0).abs() < 0.01);
-        for _ in 0..500 {
+        // 先安静后很响：歌内增益一点都不能变
+        for _ in 0..2000 {
             agc.observe(-30.0, 0.032);
         }
-        assert!((agc.auto_gain_db() - 2.0).abs() < 0.01, "之后整首不该再变");
+        let early = agc.auto_gain_db();
+        assert_eq!(early, 0.0, "首次播放没有自动增益，报 0");
+        for _ in 0..2000 {
+            agc.observe(-6.0, 0.032);
+        }
+        assert_eq!(agc.auto_gain_db(), early, "响段也不能改增益");
+        // 攒下来的窗峰值能算出整曲 p90，落在两段之间
+        let p90 = agc.whole_p90().expect("应当攒到窗峰值");
+        assert!((-30.0..=-6.0).contains(&p90), "p90 应落在两段之间: {p90}");
+        assert!(agc.peaks.len() >= 4000);
+    }
+
+    /// 第二遍（缓存命中）：第一秒就按整曲标定，整首恒定
+    #[test]
+    fn second_play_uses_cached_calibration_from_the_first_second() {
+        let cfg = WaveCfg {
+            autogain: true,
+            soft_clip: true,
+            gain: 1.6,
+            reference_dbfs: -6.0,
+        };
+        let g = autogain_from_p90(-12.0);
+        let mut agc = WaveAgc::new(cfg, Some(g));
+        assert!(agc.calibrated());
+        assert!((agc.auto_gain_db() - g).abs() < 0.01, "第一帧就该是标定值");
+        // 整首不许变，也不该再攒窗峰值（缓存有了就不用再估）
+        for db in [-35.0f32, -8.0, -2.0, -20.0] {
+            for _ in 0..500 {
+                agc.observe(db, 0.032);
+            }
+            assert!((agc.auto_gain_db() - g).abs() < 0.01);
+        }
+        assert!(agc.peaks.is_empty(), "命中缓存就不该再攒");
     }
 
     #[test]

@@ -1077,14 +1077,9 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         crate::source::source_display(&song.source)
     );
     // 逐曲自动增益：让用户看到「这首歌被调了多少」，异常歌好排查（暂停后保留最后的值）
-    // 测速还没跑完时显示进度——这一路会多下一次整首音频，不能瞒着用户
+    // 首次播放没有整曲标定，这一遍就用固定增益，不显示自动值（免得闪一个假的数）
     let auto_gain = if app.anim.eq_autogain && app.anim.equalizer_on() {
-        match app.eq_auto_gain {
-            Some(g) => Some(format!("  自动 {g:+.1} dB")),
-            None => app
-                .scan_progress()
-                .map(|p| format!("  测速 {:.0}%", p * 100.0)),
-        }
+        app.eq_auto_gain.map(|g| format!("  自动 {g:+.1} dB"))
     } else {
         None
     };
