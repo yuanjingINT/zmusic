@@ -459,13 +459,17 @@ impl WaveAgc {
     }
 
     /// 归一化前的幅度（1.0 = 顶到天花板，可大于 1）。平顶标志用它。
+    ///
+    /// 自动增益开启时**只有一套公式**：`clamp((峰值 + 生效增益 + 24)/24)`。
+    /// 首次播放的「固定增益」也折成 dB 放进同一个 `生效增益`（第 8 列），
+    /// 所以 dump 里第 2、8 两列能直接复算出第 3 列，不用分两套口径。
+    /// 关掉自动增益时才走老的手动映射（归一化后再乘倍率）。
     fn x_pre(&self, peak: f32) -> f32 {
         let p = Self::peak_db(peak);
-        match self.target_db {
-            Some(_) if self.autogain => {
-                ((p + self.effective_gain_db() + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0)
-            }
-            _ => ((p - self.ceiling_db + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0) * self.user_gain,
+        if self.autogain {
+            ((p + self.effective_gain_db() + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0)
+        } else {
+            ((p - self.ceiling_db + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0) * self.user_gain
         }
     }
 
@@ -505,6 +509,10 @@ pub struct PcmAnalyzer {
     auto_gain_db: Arc<Mutex<f32>>,
     /// 播到 80% 时算出的整曲 p90（dBFS）：界面拿去写缓存，下次直接命中
     est_p90: Arc<Mutex<Option<f32>>>,
+    /// 解码流自己读到头了（歌放完）：界面据此**不再重启解码器**，避免歌尾重拉整首
+    finished: Arc<std::sync::atomic::AtomicBool>,
+    /// 播放器当前的位置（秒）：解码器按它做双向限流，别跑到播放器前面去
+    play_pos: Arc<Mutex<f64>>,
     /// 读线程用的结束旗标（Drop 时置位，避免线程卡在阻塞读上）
     stop: Arc<Mutex<bool>>,
 }
@@ -557,6 +565,8 @@ impl PcmAnalyzer {
         let wave = Arc::new(Mutex::new(WaveBuf::default()));
         let auto_gain_db = Arc::new(Mutex::new(0.0f32));
         let est_p90: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let play_pos = Arc::new(Mutex::new(start_secs));
         // 段号由界面给：同一首歌内从 1 开始，重启一次 +1（换歌重新从 1 数）
         let stop = Arc::new(Mutex::new(false));
         {
@@ -564,6 +574,8 @@ impl PcmAnalyzer {
             let auto_gain_cell = auto_gain_db.clone();
             let est_cell = est_p90.clone();
             let stop = stop.clone();
+            let finished = finished.clone();
+            let play_pos = play_pos.clone();
             let path = fifo.clone();
             std::thread::spawn(move || {
                 let Ok(mut f) = std::fs::File::open(&path) else {
@@ -590,7 +602,19 @@ impl PcmAnalyzer {
                     }
                     // 逐窗读满：mpv 写满管道就阻塞，解码节奏由我们的读取速度决定
                     if f.read_exact(&mut buf).is_err() {
+                        // 解码流读到头 = 这首歌放完了：置旗标，界面别再重启解码器
+                        // （以前歌尾重启会从 0 重拉整首，白下一遍）
+                        finished.store(true, std::sync::atomic::Ordering::Relaxed);
                         break;
+                    }
+                    // 双向限流：别让解码器跑到播放器前面太多（省带宽、也免得缓冲太深）
+                    if let Ok(pp) = play_pos.lock() {
+                        if *pp > 1.0 {
+                            let decoded = start_secs + t_start.elapsed().as_secs_f64();
+                            if decoded > *pp + 2.0 {
+                                std::thread::sleep(std::time::Duration::from_millis(20));
+                            }
+                        }
                     }
                     let mut samples = [0i16; WINDOW];
                     if let Some(chunks) = buf.as_chunks::<2>().0.get(..WINDOW) {
@@ -684,6 +708,8 @@ impl PcmAnalyzer {
             url: url.to_string(),
             auto_gain_db,
             est_p90,
+            finished,
+            play_pos,
             stop,
         })
     }
@@ -708,6 +734,18 @@ impl PcmAnalyzer {
         let w = self.wave.lock().unwrap();
         let n = w.samples.len().min(max);
         (w.samples[w.samples.len() - n..].to_vec(), w.seq)
+    }
+
+    /// 解码流是否已经读到末尾（这首歌放完了）：界面据此不再重启解码器
+    pub fn finished(&self) -> bool {
+        self.finished.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 告诉解码器播放器现在的位置（秒），用于双向限流
+    pub fn set_play_pos(&self, pos: f64) {
+        if let Ok(mut p) = self.play_pos.lock() {
+            *p = pos;
+        }
     }
 
     /// 解码进程是否还活着（死了要降级，不能一直读旧值）

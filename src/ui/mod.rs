@@ -491,7 +491,7 @@ impl App {
             // 空闲或纯播放时回到 60ms 一拍，别为了这点延迟让空闲 CPU 翻三倍。
             // 「真在播放」= 有歌、mpv 没空闲、也没暂停；暂停后动画立刻停。
             let st = self.player.state();
-            let playing = self.now_playing.is_some() && !st.idle && !st.paused;
+                let playing = self.now_playing.is_some() && !st.idle && !st.paused;
             // 只有「正在播放页 + 真在播放 + 均衡器开着」才按均衡器帧率重绘；
             // 切页/暂停立刻回到空闲节奏（60ms），不因为均衡器让全程序按 15fps 跑。
             let tick_ms = if self.is_loading() {
@@ -850,6 +850,16 @@ impl App {
             }
             self.eq_last_pos = Some(pos);
         }
+        // 歌放完了（eof）：解码器立刻收，绝不在歌尾重启——
+        // 以前这里会重建一次、然后从 0 重拉整首（实测多下 11.6MB/首）
+        if st.eof {
+            self.eq_analyzer = None;
+            return;
+        }
+        // 把播放位置喂给解码器做双向限流（别让它跑到播放器前面）
+        if let (Some(a), Some(pos)) = (self.eq_analyzer.as_ref(), st.time_pos) {
+            a.set_play_pos(pos);
+        }
         let playing = self.now_playing.is_some() && !st.idle && !st.paused;
         let want = self.anim.equalizer_on()
             && self.anim.equalizer_source == crate::config::EqSource::Pcm
@@ -861,6 +871,10 @@ impl App {
             return;
         }
         if let Some(a) = self.eq_analyzer.as_mut() {
+            if a.finished() {
+                self.eq_analyzer = None;
+                return;
+            }
             if !a.alive() {
                 self.eq_analyzer = None;
                 self.eq_failed();
