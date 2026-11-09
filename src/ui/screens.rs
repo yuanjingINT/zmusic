@@ -1061,10 +1061,13 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         return;
     };
     let st = app.player.state();
-    let rows_n = ((area.height as usize).saturating_sub(8) / 4).clamp(3, 5);
-    let [head, spec, prog, lyric_area] = Layout::vertical([
+    // 波形上下各留一行空白：贴太紧会显得挤（用户点名要的）
+    let rows_n = ((area.height as usize).saturating_sub(10) / 4).clamp(3, 5);
+    let [head, _gap_top, spec, _gap_bottom, prog, lyric_area] = Layout::vertical([
         Constraint::Length(2),
+        Constraint::Length(1),
         Constraint::Length(rows_n as u16),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
     ])
