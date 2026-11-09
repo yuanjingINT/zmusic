@@ -220,9 +220,13 @@ mod tests {
         assert!(g.is_set(0, 4)); // 中线
         let mut h = DotGrid::new(1, 8);
         h.set_wave_column(0, 1.0);
-        assert!(h.is_set(0, 1)); // 顶（中线上一格留边）
+        assert!(h.is_set(0, 1)); // 顶（偶数行留一格边）
         assert!(h.is_set(0, 7)); // 底
         assert!(h.is_set(0, 4)); // 中线
+        // 实心填充：中间行也要点亮，不能只有上下两条描边
+        for r in 1..=7 {
+            assert!(h.is_set(0, r), "第 {r} 行没填满");
+        }
     }
 
     #[test]
@@ -313,48 +317,26 @@ impl WaveRing {
 }
 
 impl DotGrid {
-    /// 一列对称波形：中线 + 上下镜像的两条轨迹（示波器画法，不是实心带）。
-    /// `amp` 0..=1（1 = 顶到上下边）；静音时两条轨迹贴在中线附近。
+    /// 一列对称波形：从**中线向上向下填满**到幅度位置（实心面积，不是描边）。
+    /// `amp` 0..=1；静音时只剩中线那一个点，看起来就是一条细线。
     pub fn set_wave_column(&mut self, col: usize, amp: f32) {
         if col >= self.cols || self.rows < 3 {
             return;
         }
         let center = self.rows / 2;
-        let half = (center as f32 - 1.0).max(1.0);
-        let span = (amp.clamp(0.0, 1.0) * half).round() as usize;
-        // 中线：低对比度的一行点
-        self.set(col, center);
-        // 上下对称的两条轨迹
-        self.set(col, center.saturating_sub(span).min(center));
-        self.set(col, (center + span).min(self.rows - 1));
+        let span_max = center.min(self.rows - 1 - center);
+        // 向下取整：安静段才会真的塌成 1 个点（细线），不会被四舍五入撑成一条厚带
+        let span = (amp.clamp(0.0, 1.0) * span_max as f32).floor() as usize;
+        let span = span.min(span_max);
+        for r in center.saturating_sub(span)..=(center + span).min(self.rows - 1) {
+            self.set(col, r);
+        }
     }
 
-    /// 波形整幅：`amps` 是每个点列一个幅度；相邻列之间补竖线，滚动不断线
+    /// 波形整幅：`amps` 是每个点列一个幅度，实心填充
     pub fn wave(&mut self, amps: &[f32]) {
-        if self.rows < 3 || self.cols == 0 {
-            return;
-        }
-        let center = self.rows / 2;
-        let half = (center as f32 - 1.0).max(1.0);
-        let span_of = |a: f32| (a.clamp(0.0, 1.0) * half).round() as usize;
-        let mut prev: Option<usize> = None;
         for (c, a) in amps.iter().enumerate().take(self.cols) {
-            let span = span_of(*a);
             self.set_wave_column(c, *a);
-            if let Some(p) = prev {
-                if p != span {
-                    let (lo, hi) = if p < span { (p, span) } else { (span, p) };
-                    for s in lo..=hi {
-                        for r in [
-                            center.saturating_sub(s),
-                            (center + s).min(self.rows.saturating_sub(1)),
-                        ] {
-                            self.set(c, r);
-                        }
-                    }
-                }
-            }
-            prev = Some(span);
         }
     }
 

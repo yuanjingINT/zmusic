@@ -51,6 +51,10 @@ equalizer_fps = 30
 equalizer_source = "pcm"
 # 自动增益：用最近 10 秒的能量分位数动态标定 dB 范围（安静段自动压到 1-2 档）
 eq_agc = true
+# 波形满高对应的 dBFS（越小越容易顶满；默认 -6）
+eq_reference_dbfs = -6.0
+# 波形增益（1.0 = 不放大；默认 1.9，让副歌中位也能顶到 8/9 点）
+eq_gain = 1.9
 
 [jamendo]
 # Jamendo 免费申请的 client_id（https://devportal.jamendo.com/）
@@ -83,6 +87,10 @@ struct Ui {
     equalizer_source: Option<String>,
     #[serde(default)]
     eq_agc: Option<bool>,
+    #[serde(default)]
+    eq_reference_dbfs: Option<f32>,
+    #[serde(default)]
+    eq_gain: Option<f32>,
 }
 
 /// 均衡器数据来源
@@ -96,7 +104,7 @@ pub enum EqSource {
 
 /// 动效开关：总开关 + 每个动效单独开关，全部默认开。
 /// 总开关关掉时行为与「没有动画的版本」完全一致（渲染函数走静态分支）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Animations {
     pub animations: bool,
     pub spinner: bool,
@@ -109,6 +117,10 @@ pub struct Animations {
     pub equalizer_source: EqSource,
     /// 自动增益标定（默认开）
     pub eq_agc: bool,
+    /// 波形满高对应的 dBFS（默认 -6）
+    pub eq_reference_dbfs: f32,
+    /// 波形增益（默认 1.4）
+    pub eq_gain: f32,
 }
 
 impl Default for Animations {
@@ -122,6 +134,8 @@ impl Default for Animations {
             equalizer_fps: 30,
             equalizer_source: EqSource::Pcm,
             eq_agc: true,
+            eq_reference_dbfs: -6.0,
+            eq_gain: 1.9,
         }
     }
 }
@@ -270,6 +284,16 @@ impl Config {
                 .or(file_val)
                 .unwrap_or(default)
         };
+        let pick_f32 = |env: &dyn Fn(&str) -> Option<String>,
+                        env_key: &str,
+                        file_val: Option<f32>,
+                        default: f32|
+         -> f32 {
+            env(env_key)
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .or(file_val)
+                .unwrap_or(default)
+        };
         let pick_opt = |env_key: &str, file_val: Option<String>| -> Option<String> {
             env(env_key)
                 .and_then(non_empty)
@@ -304,6 +328,13 @@ impl Config {
                 fade: parsed.ui.fade.unwrap_or(true),
                 equalizer_fps: pick_u8(env, "ZMUSIC_EQ_FPS", parsed.ui.equalizer_fps, 30),
                 eq_agc: pick_bool(env, "ZMUSIC_EQ_AGC", parsed.ui.eq_agc, true),
+                eq_reference_dbfs: pick_f32(
+                    env,
+                    "ZMUSIC_EQ_REF_DBFS",
+                    parsed.ui.eq_reference_dbfs,
+                    -6.0,
+                ),
+                eq_gain: pick_f32(env, "ZMUSIC_EQ_GAIN", parsed.ui.eq_gain, 1.9),
                 equalizer_source: match pick("ZMUSIC_EQ_SOURCE", parsed.ui.equalizer_source, "pcm")
                     .as_str()
                 {

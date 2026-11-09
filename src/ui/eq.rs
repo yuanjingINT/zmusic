@@ -250,8 +250,27 @@ struct WaveBuf {
 /// 固定基准（-9 dBFS，约等于流行乐副歌峰值）时实测安静 p50=0.09、副歌 p50=0.76，
 /// 这才是「安静一条线、副歌占满」。基准只按 0.1 dB/s 往下漂（下限 -22 dBFS），
 /// 一首歌的时间尺度内基本不动，所以不会出现「整排忽高忽低」。
+/// 波形标定参数（来自 [ui] eq_reference_dbfs / eq_gain）
+#[derive(Debug, Clone, Copy)]
+pub struct WaveCfg {
+    /// 满高基准（dBFS）
+    pub reference_dbfs: f32,
+    /// 整体增益
+    pub gain: f32,
+}
+
+impl Default for WaveCfg {
+    fn default() -> Self {
+        WaveCfg {
+            reference_dbfs: -6.0,
+            gain: 1.9,
+        }
+    }
+}
+
 struct WaveAgc {
     ref_db: f32,
+    gain: f32,
 }
 
 /// 基准下漂速度（dB/秒）：一首歌内几乎不动
@@ -260,13 +279,18 @@ const WAVE_REF_DECAY_DB_PER_S: f32 = 0.1;
 const WAVE_REF_FLOOR_DB: f32 = -22.0;
 /// 基准上限：峰值不许把基准顶到满刻度以上
 const WAVE_REF_CAP_DB: f32 = -3.0;
-/// 冷启动基准：约等于流行乐副歌峰值（-9 dBFS）
-const WAVE_REF_INIT_DB: f32 = -9.0;
+/// 冷启动基准（可被 [ui] eq_reference_dbfs 覆盖，默认 -6 dBFS）
+const WAVE_REF_INIT_DB: f32 = -6.0;
 
 impl WaveAgc {
-    fn new() -> Self {
+    fn new(cfg: WaveCfg) -> Self {
         WaveAgc {
-            ref_db: WAVE_REF_INIT_DB,
+            ref_db: if cfg.reference_dbfs.is_finite() {
+                cfg.reference_dbfs.clamp(-60.0, -3.0)
+            } else {
+                WAVE_REF_INIT_DB
+            },
+            gain: cfg.gain.clamp(0.1, 8.0),
         }
     }
 
@@ -279,9 +303,8 @@ impl WaveAgc {
     }
 
     fn amp(&self, peak: f32) -> f32 {
-        (peak / 10f32.powf(self.ref_db / 20.0))
-            .clamp(0.0, 1.0)
-            .powf(0.9)
+        // 线性映射：增益直接作用在幅度上（之前多叠一个 powf(0.9) 会把峰值压低半档）
+        ((peak / 10f32.powf(self.ref_db / 20.0)) * self.gain).clamp(0.0, 1.0)
     }
 }
 
@@ -299,7 +322,7 @@ pub struct PcmAnalyzer {
 
 impl PcmAnalyzer {
     /// 起解码进程。`start_secs` 用来和播放器对齐（从当前播放位置开始解）。
-    pub fn start(url: &str, start_secs: f64) -> Option<PcmAnalyzer> {
+    pub fn start(url: &str, start_secs: f64, wave_cfg: WaveCfg) -> Option<PcmAnalyzer> {
         let dir = eq_dir();
         let _ = std::fs::create_dir_all(&dir);
         sweep_stale(&dir);
@@ -346,7 +369,7 @@ impl PcmAnalyzer {
                 // 已拿到 fd：立刻 unlink，靠 fd 继续读写。进程被强杀也不会留残留。
                 let _ = std::fs::remove_file(&path);
                 let mut buf = vec![0u8; WINDOW * 2];
-                let mut wagc = WaveAgc::new();
+                let mut wagc = WaveAgc::new(wave_cfg);
                 // 调试用：把每窗幅度写成 CSV（ms,amp,rms_db），默认不写
                 let mut dump = std::env::var("ZMUSIC_WAVE_DUMP").ok().and_then(|p| {
                     std::fs::OpenOptions::new()
