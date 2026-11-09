@@ -4,6 +4,7 @@ mod hints;
 mod nav;
 mod playback;
 pub mod screens;
+pub mod spectrum;
 mod search_keys;
 mod status;
 mod theme;
@@ -195,6 +196,10 @@ pub struct App {
     /// 解码失败次数 / 是否已降级到正弦兜底
     eq_fail: u32,
     eq_fallback: bool,
+    /// 对称波形的滚动缓冲（暂停时不再推送，画面自然静止）
+    wave: crate::ui::spectrum::WaveRing,
+    /// 跳转后等播放位置稳定再重开解码器（否则会拿过期的位置去解码）
+    eq_hold: Option<Instant>,
     /// 当前播放的流地址（频谱解码要重拉一次）
     now_url: Option<String>,
     favorites: Favorites,
@@ -341,6 +346,8 @@ impl App {
             anim,
             fade_start: None,
             eq_analyzer: None,
+            wave: crate::ui::spectrum::WaveRing::new(),
+            eq_hold: None,
             eq_fail: 0,
             eq_fallback: false,
             now_url: None,
@@ -724,7 +731,24 @@ impl App {
                 self.eq_analyzer = None;
                 self.eq_failed();
             }
-            return;
+            // 和「解码器自己该到的位置」比，差 2 秒以上才算用户拖动过
+            if let (Some(pos), Some(a)) = (st.time_pos, self.eq_analyzer.as_ref()) {
+                if (pos - a.expected_pos()).abs() > 2.0 {
+                    self.eq_analyzer = None;
+                    // mpv 的 time_pos 是异步更新的：此刻读到的很可能还是拖动前的位置，
+                    // 等 400ms 让它稳定，再从新位置重开解码器，否则波形画的是旧段落
+                    self.eq_hold = Some(Instant::now() + Duration::from_millis(400));
+                }
+            }
+            if self.eq_analyzer.is_some() {
+                return;
+            }
+        }
+        if let Some(t) = self.eq_hold {
+            if Instant::now() < t {
+                return;
+            }
+            self.eq_hold = None;
         }
         let Some(url) = self.now_url.clone() else {
             return;

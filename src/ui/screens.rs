@@ -1105,63 +1105,54 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         ar,
     );
 
-    // 频谱：优先真解码数据，未就绪/降级时用慢呼吸示意波形；12 段（窄终端 8、宽屏 16）
+    // 频谱：对称波形（braille 点阵，方案 B）。
+    // 每帧从解码线程取新增样本推入滚动缓冲；暂停时解码器已回收、缓冲不再增长，
+    // 所以画面停住不动——这是「真跟随」最直观的证据。
     let playing = !st.idle && !st.paused && st.time_pos.is_some();
-    let t_secs = app.started.elapsed().as_secs_f64();
-    // 段数随宽度：宽屏 16、常规 12、窄屏 8、极窄 4（<40 列也不 panic）
-    let n_bands = if area.width >= 100 {
-        16
-    } else if area.width >= 80 {
-        12
-    } else if area.width >= 40 {
-        8
-    } else {
-        4
-    }
-    .min((area.width as usize / 2).max(2));
-    let spectrum: Option<(Vec<u8>, Vec<u8>)> = if app.anim.equalizer_on() && playing {
-        match app.eq_analyzer.as_ref().map(|a| a.frame()) {
-            Some(f) if !f.levels.is_empty() => Some((
-                crate::ui::eq::merge_bands(&f.levels, n_bands),
-                crate::ui::eq::merge_bands(&f.peaks, n_bands),
-            )),
-            _ => {
-                let lv = crate::ui::anim::breathing_levels(t_secs, n_bands);
-                Some((lv.clone(), lv))
+    let show_wave = app.anim.equalizer_on() && (!app.wave.is_empty() || playing);
+    if show_wave {
+        let cols = spec.width as usize;
+        if playing {
+            if let Some(a) = app.eq_analyzer.as_ref() {
+                let (tail, seq) = a.wave(256);
+                app.wave.sync(&tail, seq, cols * 2);
             }
         }
-    } else {
-        None
-    };
-    if let Some((levels, peaks)) = spectrum {
-        // 2 格宽柱子 + 1 格间距，左右各留 2 格；宽度不够自动降级
-        let margin = 2u16;
-        let avail = area.width.saturating_sub(margin * 2) as usize;
-        let (bands, band_w, gap) = crate::ui::anim::layout(avail, n_bands);
-        let lv = crate::ui::eq::merge_bands(&levels, bands);
-        let pk = crate::ui::eq::merge_bands(&peaks, bands);
-        let lines = crate::ui::anim::spectrum_rows(&lv, &pk, rows_n, band_w, gap);
-        for (i, cells) in lines.iter().enumerate() {
-            let mut spans: Vec<Span> = Vec::with_capacity(cells.len());
-            for c in cells {
-                // 颜色按「高度」分档：低暗、中强调、顶亮
-                // 按高度分档：顶行/峰值亮白，中段强调色，底部暗
-                let style = if c.ch == '▔' || c.from_bottom + 1 >= rows_n {
-                    theme::song_title()
-                } else if c.from_bottom * 3 >= rows_n {
-                    theme::primary()
-                } else {
-                    theme::dim()
-                };
-                spans.push(Span::styled(c.ch.to_string(), style));
+        let amps = app.wave.snapshot(cols * 2);
+        if crate::ui::spectrum::braille_ok() {
+            let mut grid = crate::ui::spectrum::DotGrid::new(cols * 2, rows_n * 4);
+            grid.wave(&amps);
+            let cells = grid.to_braille();
+            for (r, line) in cells.iter().enumerate() {
+                let spans: Vec<Span> = line
+                    .iter()
+                    .enumerate()
+                    .map(|(c, ch)| {
+                        // 颜色按「离中线多远」分档：中线暗、中段强调、靠近峰值亮
+                        let d = grid.cell_distance(c, r);
+                        let style = if d >= 0.7 {
+                            theme::song_title()
+                        } else if d <= 0.3 {
+                            theme::dim()
+                        } else {
+                            theme::primary()
+                        };
+                        Span::styled(ch.to_string(), style)
+                    })
+                    .collect();
+                let row = Rect::new(spec.x, spec.y + r as u16, spec.width, 1);
+                f.render_widget(Paragraph::new(Line::from(spans)), row);
             }
-            let row = Rect::new(
-                spec.x + margin,
-                spec.y + i as u16,
-                spec.width.saturating_sub(margin * 2),
-                1,
+        } else {
+            // 兜底：单行 sparkline（方案 C），不再退回方块柱
+            let mid = spec.y + (rows_n as u16 / 2);
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    crate::ui::spectrum::sparkline(&amps, cols),
+                    theme::primary(),
+                ))),
+                Rect::new(spec.x, mid, spec.width, 1),
             );
-            f.render_widget(Paragraph::new(Line::from(spans)), row);
         }
     }
     // 进度：平滑进度条（主题色）+ 右侧时间

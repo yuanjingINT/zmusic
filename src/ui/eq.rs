@@ -8,10 +8,17 @@
 //! 纯函数（goertzel / band_energies / to_levels / smooth）都能单测；
 //! 进程部分（`PcmAnalyzer`）负责 FIFO、读线程和清理孤儿。
 
+// 频段那套（Goertzel / 16 段能量 / Agc 标定 / 峰值保持 / 合并）暂时不参与渲染：
+// 现在的波形走「窗内峰值」通路。按 Chief 要求保留，换点阵面积或柱状样式时直接接回来，
+// 所以这里允许 dead_code（它们都有单测覆盖）。
+#![allow(dead_code)]
+
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+
+use crate::ui::spectrum::{HeightCfg, MAX_HEIGHT};
 
 /// 频段中心频率：对数等距分布（60Hz–3.5kHz，8kHz 采样下不越奈奎斯特）
 pub fn band_centers(n: usize) -> Vec<f64> {
@@ -67,6 +74,7 @@ pub fn band_energies(samples: &[i16], sr: f64, n: usize) -> Vec<f32> {
 /// 逐段百分位等于自适应均衡，稳态信号永远骑在自己分布顶端，也饱和。
 /// 所以只让 AGC 决定「天花板在哪」（最近 ~10 秒各频段 dB 的 p95 + 10dB 余量），
 /// 再按固定 70dB 动态范围往下铺，安静段自然落到 1–3 档。
+#[allow(dead_code)] // 保留：固定刻度映射的标定器，换样式时用来定 dB→高度
 #[derive(Debug, Clone)]
 pub struct Agc {
     /// 各频段 dB 的衰减直方图（16 × 80 bin）
@@ -134,15 +142,22 @@ impl Agc {
         }
     }
 
-    /// dB → 0–7 档：固定 70dB 动态范围，天花板由 AGC 定；关掉时用 -70..0
-    pub fn level(&self, _band: usize, db: f32) -> u8 {
-        let ceil = match self.ceil {
-            Some(c) if self.enabled => c,
-            _ => 0.0,
-        };
-        let floor = ceil - AGC_SPAN_DB;
-        let t = ((db - floor) / (ceil - floor)).clamp(0.0, 1.0);
-        (t * 7.0).round() as u8
+    /// dB → 高度（0..=7 连续，量化交给渲染器）：天花板由 AGC 定，关掉时用 -70..0
+    pub fn height(&self, _band: usize, db: f32) -> f32 {
+        HeightCfg {
+            floor: self.floor(),
+            span: AGC_SPAN_DB,
+            gamma: 1.0,
+        }
+        .height(db)
+    }
+
+    /// 当前映射的下界（dB）
+    pub fn floor(&self) -> f32 {
+        match self.ceil {
+            Some(c) if self.enabled => c - AGC_SPAN_DB,
+            _ => -AGC_SPAN_DB,
+        }
     }
 }
 
@@ -150,54 +165,53 @@ impl Agc {
 pub const ATTACK: f32 = 0.65;
 pub const RELEASE: f32 = 0.12;
 
-pub fn smooth(prev: &[u8], target: &[u8], attack: f32, release: f32) -> Vec<u8> {
-    prev.iter()
-        .zip(target.iter())
-        .map(|(p, t)| {
-            let (p, t) = (*p as f32, *t as f32);
-            let k = if t >= p { attack } else { release };
-            (p + (t - p) * k).round().clamp(0.0, 7.0) as u8
-        })
-        .collect()
-}
+/// 峰值下落速度（高度/秒）：满格约 2 秒落完，匀速
+pub const PEAK_FALL_PER_S: f32 = MAX_HEIGHT / 2.0;
 
-/// 峰值保持：0.5 秒内不动，之后每帧掉一档（匀速下落）
+/// 峰值保持：`hold_ms` 内不动，之后按时间匀速下落（与帧率无关）
+#[allow(dead_code)] // 保留：峰值保持（点阵/柱状样式要用）
 #[derive(Debug, Clone)]
 pub struct Peaks {
-    pub values: Vec<u8>,
+    pub values: Vec<f32>,
     pub held_at: Vec<u64>,
+    last_ms: u64,
 }
 
 impl Peaks {
     pub fn new(n: usize) -> Self {
         Peaks {
-            values: vec![0; n],
+            values: vec![0.0; n],
             held_at: vec![0; n],
+            last_ms: 0,
         }
     }
     /// `now_ms` 传单调时钟毫秒；`hold_ms` = 500
-    pub fn update(&mut self, levels: &[u8], now_ms: u64, hold_ms: u64) -> Vec<u8> {
+    pub fn update(&mut self, levels: &[f32], now_ms: u64, hold_ms: u64) -> Vec<f32> {
         if self.values.len() != levels.len() {
             *self = Peaks::new(levels.len());
         }
+        let dt = now_ms.saturating_sub(self.last_ms) as f32 / 1000.0;
+        self.last_ms = now_ms;
         for (i, lv) in levels.iter().enumerate() {
             if *lv >= self.values[i] {
                 self.values[i] = *lv;
                 self.held_at[i] = now_ms;
             } else if now_ms.saturating_sub(self.held_at[i]) >= hold_ms {
-                self.values[i] = self.values[i].saturating_sub(1);
-                self.held_at[i] = now_ms;
+                self.values[i] = (self.values[i] - PEAK_FALL_PER_S * dt).max(0.0);
             }
         }
         self.values.clone()
     }
 }
 
-/// 一帧频谱：当前档位 + 峰值保持档位
+/// 一帧频谱：当前高度 + 峰值高度（0..=7 连续值，量化交给渲染器）。
+///
+/// 暂时不用：现在的波形走「窗内峰值」通路；换点阵面积/柱状样式时可以直接接回来。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct EqFrame {
-    pub levels: Vec<u8>,
-    pub peaks: Vec<u8>,
+    pub heights: Vec<f32>,
+    pub peaks: Vec<f32>,
 }
 
 /// FIFO 放 $XDG_RUNTIME_DIR/zmusic（没有就退回 /tmp），比 /tmp 干净、随登录会话回收
@@ -222,10 +236,63 @@ fn sweep_stale(dir: &std::path::Path) {
     }
 }
 
+/// 波形样本（对称波形的每点列幅度，0..=1）与单调序号
+#[derive(Debug, Default)]
+struct WaveBuf {
+    samples: Vec<f32>,
+    seq: u64,
+}
+
+/// 波形纵向标定：**窗内峰值 + 固定基准**，基准只以极慢速度微调。
+///
+/// 为什么不用「近 10 秒 p95 / 峰值保持」做归一化：那等于每首歌自己归一化，
+/// 实测安静前奏 p50=0.40、副歌 p50=0.42（几乎一样），动态全被吃掉。
+/// 固定基准（-9 dBFS，约等于流行乐副歌峰值）时实测安静 p50=0.09、副歌 p50=0.76，
+/// 这才是「安静一条线、副歌占满」。基准只按 0.1 dB/s 往下漂（下限 -22 dBFS），
+/// 一首歌的时间尺度内基本不动，所以不会出现「整排忽高忽低」。
+struct WaveAgc {
+    ref_db: f32,
+}
+
+/// 基准下漂速度（dB/秒）：一首歌内几乎不动
+const WAVE_REF_DECAY_DB_PER_S: f32 = 0.1;
+/// 基准下限（约 -22 dBFS）：再安静也不放大底噪
+const WAVE_REF_FLOOR_DB: f32 = -22.0;
+/// 基准上限：峰值不许把基准顶到满刻度以上
+const WAVE_REF_CAP_DB: f32 = -3.0;
+/// 冷启动基准：约等于流行乐副歌峰值（-9 dBFS）
+const WAVE_REF_INIT_DB: f32 = -9.0;
+
+impl WaveAgc {
+    fn new() -> Self {
+        WaveAgc {
+            ref_db: WAVE_REF_INIT_DB,
+        }
+    }
+
+    fn observe(&mut self, peak_db: f32, dt_s: f32) {
+        if peak_db > self.ref_db {
+            self.ref_db = peak_db.min(WAVE_REF_CAP_DB);
+        } else {
+            self.ref_db = (self.ref_db - WAVE_REF_DECAY_DB_PER_S * dt_s).max(WAVE_REF_FLOOR_DB);
+        }
+    }
+
+    fn amp(&self, peak: f32) -> f32 {
+        (peak / 10f32.powf(self.ref_db / 20.0))
+            .clamp(0.0, 1.0)
+            .powf(0.9)
+    }
+}
+
 pub struct PcmAnalyzer {
     child: Child,
     fifo: PathBuf,
-    frame: Arc<Mutex<EqFrame>>,
+    /// 起解码时的播放位置（秒）：界面据此发现「跳转/拖动」后重启解码
+    start: f64,
+    /// 解码开始时刻：据此推算它「现在该播到哪」，才能区分「正常前进」和「用户拖动」
+    started: std::time::Instant,
+    wave: Arc<Mutex<WaveBuf>>,
     /// 读线程用的结束旗标（Drop 时置位，避免线程卡在阻塞读上）
     stop: Arc<Mutex<bool>>,
 }
@@ -266,10 +333,10 @@ impl PcmAnalyzer {
             .spawn()
             .ok()?;
 
-        let frame = Arc::new(Mutex::new(EqFrame::default()));
+        let wave = Arc::new(Mutex::new(WaveBuf::default()));
         let stop = Arc::new(Mutex::new(false));
         {
-            let frame = frame.clone();
+            let wave = wave.clone();
             let stop = stop.clone();
             let path = fifo.clone();
             std::thread::spawn(move || {
@@ -279,13 +346,15 @@ impl PcmAnalyzer {
                 // 已拿到 fd：立刻 unlink，靠 fd 继续读写。进程被强杀也不会留残留。
                 let _ = std::fs::remove_file(&path);
                 let mut buf = vec![0u8; WINDOW * 2];
-                let mut prev: Vec<u8> = vec![0; BANDS];
-                let mut peaks = Peaks::new(BANDS);
-                let mut agc = Agc::new(
-                    std::env::var("ZMUSIC_EQ_AGC")
-                        .map(|v| v != "0")
-                        .unwrap_or(true),
-                );
+                let mut wagc = WaveAgc::new();
+                // 调试用：把每窗幅度写成 CSV（ms,amp,rms_db），默认不写
+                let mut dump = std::env::var("ZMUSIC_WAVE_DUMP").ok().and_then(|p| {
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(p)
+                        .ok()
+                });
                 let t_start = std::time::Instant::now();
                 let mut next = std::time::Instant::now();
                 loop {
@@ -302,19 +371,35 @@ impl PcmAnalyzer {
                             samples[i] = i16::from_le_bytes(*c);
                         }
                     }
-                    let energies = band_energies(&samples, SAMPLE_RATE, BANDS);
-                    agc.observe(&energies, t_start.elapsed().as_millis() as u64);
-                    let target: Vec<u8> = energies
+                    let now = t_start.elapsed().as_millis() as u64;
+                    // 波形：这一窗的**峰值** → 0..=1 幅度，压进共享缓冲
+                    // 用峰值不用 RMS：RMS 被整段平均，峰谷差被磨平，波形看起来像一条带
+                    let peak = samples
                         .iter()
-                        .enumerate()
-                        .map(|(i, e)| agc.level(i, 20.0 * e.max(1e-9).log10()))
-                        .collect();
-                    prev = smooth(&prev, &target, ATTACK, RELEASE);
-                    let peaks_now = peaks.update(&prev, t_start.elapsed().as_millis() as u64, 500);
-                    *frame.lock().unwrap() = EqFrame {
-                        levels: prev.clone(),
-                        peaks: peaks_now,
-                    };
+                        .map(|x| (*x as f32 / 32768.0).abs())
+                        .fold(0.0f32, f32::max);
+                    wagc.observe(
+                        20.0 * peak.max(1e-9).log10(),
+                        WINDOW as f32 / SAMPLE_RATE as f32,
+                    );
+                    if let Some(f) = dump.as_mut() {
+                        use std::io::Write;
+                        let _ = writeln!(
+                            f,
+                            "{},{:.4},{:.2}",
+                            now,
+                            wagc.amp(peak),
+                            20.0 * peak.max(1e-9).log10()
+                        );
+                    }
+                    {
+                        let mut w = wave.lock().unwrap();
+                        w.samples.push(wagc.amp(peak));
+                        w.seq += 1;
+                        if w.samples.len() > 2048 {
+                            w.samples.drain(..1024);
+                        }
+                    }
                     // 按实时节拍走：每窗 32ms
                     next += std::time::Duration::from_micros(WINDOW_MICROS);
                     let now = std::time::Instant::now();
@@ -329,13 +414,23 @@ impl PcmAnalyzer {
         Some(PcmAnalyzer {
             child,
             fifo,
-            frame,
+            start: start_secs,
+            started: std::time::Instant::now(),
+            wave,
             stop,
         })
     }
 
-    pub fn frame(&self) -> EqFrame {
-        self.frame.lock().unwrap().clone()
+    /// 最近 `max` 个波形样本 + 单调序号（界面据此只取新增的部分）
+    pub fn wave(&self, max: usize) -> (Vec<f32>, u64) {
+        let w = self.wave.lock().unwrap();
+        let n = w.samples.len().min(max);
+        (w.samples[w.samples.len() - n..].to_vec(), w.seq)
+    }
+
+    /// 按已运行时长推算的当前解码位置（秒）：和播放位置差太多就是用户拖过
+    pub fn expected_pos(&self) -> f64 {
+        self.start + self.started.elapsed().as_secs_f64()
     }
 
     /// 解码进程是否还活着（死了要降级，不能一直读旧值）
@@ -354,7 +449,8 @@ impl Drop for PcmAnalyzer {
 }
 
 /// 把 16 段按宽度合并成 `target` 段：每组取最大值，保证峰值不丢
-pub fn merge_bands(src: &[u8], target: usize) -> Vec<u8> {
+#[allow(dead_code)] // 保留：多段样式合并用
+pub fn merge_bands(src: &[f32], target: usize) -> Vec<f32> {
     let n = src.len();
     if target >= n || target == 0 {
         return src.to_vec();
@@ -363,7 +459,7 @@ pub fn merge_bands(src: &[u8], target: usize) -> Vec<u8> {
     for i in 0..target {
         let lo = i * n / target;
         let hi = ((i + 1) * n / target).max(lo + 1).min(n);
-        out.push(src[lo..hi].iter().copied().max().unwrap_or(0));
+        out.push(src[lo..hi].iter().copied().fold(0.0f32, f32::max));
     }
     out
 }
@@ -371,6 +467,7 @@ pub fn merge_bands(src: &[u8], target: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::spectrum;
 
     fn sine(freq: f64, sr: f64, n: usize, amp: f64) -> Vec<i16> {
         (0..n)
@@ -415,29 +512,35 @@ mod tests {
 
     #[test]
     fn smooth_attacks_fast_and_releases_slow() {
-        let up = smooth(&[0; 4], &[7; 4], ATTACK, RELEASE);
-        let down = smooth(&[7; 4], &[0; 4], ATTACK, RELEASE);
-        assert!((up[0] as i32 - 5).abs() <= 1);
-        assert!((down[0] as i32 - 6).abs() <= 1);
+        let up = spectrum::smooth(&[0.0; 4], &[7.0; 4], ATTACK, RELEASE);
+        let down = spectrum::smooth(&[7.0; 4], &[0.0; 4], ATTACK, RELEASE);
+        assert!((up[0] - 4.55).abs() < 0.6, "{up:?}");
+        assert!((down[0] - 6.16).abs() < 0.6, "{down:?}");
     }
 
     #[test]
     fn peaks_hold_then_decay() {
         let mut p = Peaks::new(4);
-        assert_eq!(p.update(&[3, 3, 3, 3], 0, 500), vec![3, 3, 3, 3]);
-        assert_eq!(p.update(&[0, 0, 0, 0], 300, 500), vec![3, 3, 3, 3]);
-        assert_eq!(p.update(&[0, 0, 0, 0], 600, 500), vec![2, 2, 2, 2]);
-        assert_eq!(p.update(&[0, 0, 0, 0], 700, 500), vec![2, 2, 2, 2]);
-        assert_eq!(p.update(&[0, 0, 0, 0], 1200, 500), vec![1, 1, 1, 1]);
+        assert_eq!(p.update(&[3.0; 4], 0, 500), vec![3.0; 4]);
+        // 保持期内不动
+        assert_eq!(p.update(&[0.0; 4], 300, 500), vec![3.0; 4]);
+        // 过期后按时间匀速下落（3.5/秒），不是按帧
+        let a = p.update(&[0.0; 4], 600, 500)[0];
+        assert!((a - 1.95).abs() < 0.2, "{a}");
+        let b = p.update(&[0.0; 4], 700, 500)[0];
+        assert!((a - b - 0.35).abs() < 0.05, "{a} {b}");
+        // 一直掉到 0，不会变负
+        let c = p.update(&[0.0; 4], 5000, 500)[0];
+        assert_eq!(c, 0.0);
     }
 
     #[test]
     fn merge_bands_keeps_peaks() {
-        let src: Vec<u8> = (0..16).map(|i| i as u8).collect();
+        let src: Vec<f32> = (0..16).map(|i| i as f32).collect();
         let m8 = merge_bands(&src, 8);
         assert_eq!(m8.len(), 8);
-        assert_eq!(m8[0], 1);
-        assert_eq!(*m8.last().unwrap(), 15);
+        assert_eq!(m8[0], 1.0);
+        assert_eq!(*m8.last().unwrap(), 15.0);
         assert_eq!(merge_bands(&src, 32), src);
     }
 
@@ -456,11 +559,11 @@ mod tests {
                 agc.observe(&[loud; BANDS], 0);
             }
         }
-        let q = agc.level(3, 20.0 * quiet.log10());
-        let l = agc.level(3, 20.0 * loud.log10());
-        assert!(q <= 3, "安静段应该低：{q}");
-        assert!(l >= 5, "响段应该高：{l}");
-        assert!(l as i32 - q as i32 >= 2, "差值太小：{q} vs {l}");
+        let q = agc.height(3, 20.0 * quiet.log10());
+        let l = agc.height(3, 20.0 * loud.log10());
+        assert!(q <= 3.0, "安静段应该低：{q}");
+        assert!(l >= 5.0, "响段应该高：{l}");
+        assert!(l - q >= 2.0, "差值太小：{q} vs {l}");
     }
 
     #[test]
@@ -472,8 +575,8 @@ mod tests {
             agc.observe(&e, t);
             t += 32;
         }
-        // 关掉 AGC：固定 -70..0，-70 → 0 档、0 → 7 档
-        assert_eq!(agc.level(0, -70.0), 0);
-        assert_eq!(agc.level(0, 0.0), 7);
+        // 关掉 AGC：固定 -70..0，-70 → 0、0 → 7
+        assert_eq!(agc.height(0, -70.0), 0.0);
+        assert_eq!(agc.height(0, 0.0), 7.0);
     }
 }
