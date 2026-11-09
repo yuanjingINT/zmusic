@@ -513,6 +513,9 @@ pub struct PcmAnalyzer {
     finished: Arc<std::sync::atomic::AtomicBool>,
     /// 播放器当前的位置（秒）：解码器按它做双向限流，别跑到播放器前面去
     play_pos: Arc<Mutex<f64>>,
+    /// 读闸门：false = 暂停读管道（mpv 写满管道会阻塞，也就停止下载）。
+    /// 切页/暂停/停止时关闸，回来再开——重新开一条解码流要重拉整首，不能随便重开。
+    gate: Arc<std::sync::atomic::AtomicBool>,
     /// 读线程用的结束旗标（Drop 时置位，避免线程卡在阻塞读上）
     stop: Arc<Mutex<bool>>,
 }
@@ -567,6 +570,7 @@ impl PcmAnalyzer {
         let est_p90: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
         let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let play_pos = Arc::new(Mutex::new(start_secs));
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
         // 段号由界面给：同一首歌内从 1 开始，重启一次 +1（换歌重新从 1 数）
         let stop = Arc::new(Mutex::new(false));
         {
@@ -576,6 +580,7 @@ impl PcmAnalyzer {
             let stop = stop.clone();
             let finished = finished.clone();
             let play_pos = play_pos.clone();
+            let gate = gate.clone();
             let path = fifo.clone();
             std::thread::spawn(move || {
                 let Ok(mut f) = std::fs::File::open(&path) else {
@@ -599,6 +604,11 @@ impl PcmAnalyzer {
                 loop {
                     if *stop.lock().unwrap() {
                         break;
+                    }
+                    if !gate.load(std::sync::atomic::Ordering::Relaxed) {
+                        // 关闸：不读管道 → mpv 写满就阻塞 → 不再下载
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                        continue;
                     }
                     // 逐窗读满：mpv 写满管道就阻塞，解码节奏由我们的读取速度决定
                     if f.read_exact(&mut buf).is_err() {
@@ -710,6 +720,7 @@ impl PcmAnalyzer {
             est_p90,
             finished,
             play_pos,
+            gate,
             stop,
         })
     }
@@ -739,6 +750,11 @@ impl PcmAnalyzer {
     /// 解码流是否已经读到末尾（这首歌放完了）：界面据此不再重启解码器
     pub fn finished(&self) -> bool {
         self.finished.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 开关读闸门：false 时解码器会阻塞在写管道上（等于暂停下载和 CPU）
+    pub fn set_gate(&self, on: bool) {
+        self.gate.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// 告诉解码器播放器现在的位置（秒），用于双向限流

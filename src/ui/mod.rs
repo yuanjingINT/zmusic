@@ -223,6 +223,8 @@ pub struct App {
     eq_auto_key: Option<String>,
     /// 当前这首歌里解码器是第几次启动（dump 的段号，换歌归 1）
     eq_seg: usize,
+    /// 哪一代播放已经「唱完」了：这一代内不再重建解码器（防止歌尾重拉整首）
+    eq_done_gen: Option<u64>,
     /// 逐曲响度缓存：歌曲 key → p90 dB（存 ~/.cache/zmusic/eq_gain.json）
     eq_cache: std::collections::HashMap<String, f32>,
     /// 缓存是否已从磁盘读过
@@ -379,6 +381,7 @@ impl App {
             eq_auto_gain: None,
             eq_auto_key: None,
             eq_seg: 0,
+            eq_done_gen: None,
             eq_cache: std::collections::HashMap::new(),
             eq_cache_loaded: false,
             eq_fail: 0,
@@ -838,60 +841,74 @@ impl App {
         // 拖动判定：只有播放位置在**两拍之间**跳变超过 2.5 秒才算用户拖动。
         // 之前拿「解码器自报的 expected_pos」比，正常播放时解码器慢半拍就会被
         // 当成拖动，导致解码器每 7–20 秒自杀重建一次（波形和标定跟着抖）。
+        let mut seeked = false;
         if let Some(pos) = st.time_pos {
             if let Some(prev) = self.eq_last_pos {
                 let back = pos < prev - 0.2; // 倒退就是 seek
                 let jump = (pos - prev) > 2.0; // 往前跳超过 2 秒也是
                 if back || jump {
-                    self.eq_analyzer = None;
-                    // mpv 的 time_pos 是异步更新的：等它稳定再从新位置重开
-                    self.eq_hold = Some(Instant::now() + Duration::from_millis(400));
+                    seeked = true;
                 }
             }
             self.eq_last_pos = Some(pos);
         }
-        // 歌放完了（eof）：解码器立刻收，绝不在歌尾重启——
-        // 以前这里会重建一次、然后从 0 重拉整首（实测多下 11.6MB/首）
-        if st.eof {
+        // 歌放完了（eof 或已到结尾 5 秒内）：收掉解码器，并给这一「代」打完成标记。
+        // 以前这里会重建一次、从 0 重拉整首（实测多下 11.6MB/首）。
+        let near_end = match (st.time_pos, st.duration) {
+            (Some(p), Some(d)) if d > 5.0 => p >= d - 5.0,
+            _ => false,
+        };
+        if st.eof || near_end {
+            self.eq_analyzer = None;
+            self.eq_done_gen = Some(self.play_gen);
+            return;
+        }
+        // 根本没歌在播（用户停了/清空了队列）：解码器该收就收
+        if self.now_playing.is_none() {
             self.eq_analyzer = None;
             return;
         }
-        // 把播放位置喂给解码器做双向限流（别让它跑到播放器前面）
-        if let (Some(a), Some(pos)) = (self.eq_analyzer.as_ref(), st.time_pos) {
-            a.set_play_pos(pos);
+        // 换歌了：解码器还连着上一首的流，必须重建（否则波形画的是上一首）
+        if let (Some(url), Some(a)) = (self.now_url.as_deref(), self.eq_analyzer.as_ref()) {
+            if a.url() != url {
+                self.eq_analyzer = None;
+                self.eq_seg = 0; // 换歌：段号重新从 1 数
+            }
         }
-        let playing = self.now_playing.is_some() && !st.idle && !st.paused;
-        let want = self.anim.equalizer_on()
+        if seeked {
+            // 拖动后必须从新位置重开，并清掉「这一代已结束」的标记
+            self.eq_analyzer = None;
+            self.eq_done_gen = None;
+            // mpv 的 time_pos 是异步更新的：等它稳定再从新位置重开
+            self.eq_hold = Some(Instant::now() + Duration::from_millis(400));
+        }
+        // 只有在「正在播放页 + 真在播放」时才需要读流；其余情况**不丢解码器**，
+        // 只关闸门（不读管道 → mpv 阻塞 → 不再下载）。丢了解码器再回来又要重拉整首。
+        let active = self.anim.equalizer_on()
             && self.anim.equalizer_source == crate::config::EqSource::Pcm
             && !self.eq_fallback
             && self.screen == ScreenKind::NowPlaying
-            && playing;
-        if !want {
+            && self.now_playing.is_some()
+            && !st.idle
+            && !st.paused;
+        let mut dead = false;
+        if let Some(a) = self.eq_analyzer.as_mut() {
+            if let Some(pos) = st.time_pos {
+                a.set_play_pos(pos);
+            }
+            a.set_gate(active);
+            dead = !a.alive() && !a.finished();
+        }
+        if dead {
+            // 解码进程意外死了：收掉，下一次 tick 允许重建一次（有连败计数兜底）
             self.eq_analyzer = None;
+            self.eq_failed();
+        }
+        if self.eq_analyzer.is_some() {
             return;
         }
-        if let Some(a) = self.eq_analyzer.as_mut() {
-            if a.finished() {
-                self.eq_analyzer = None;
-                return;
-            }
-            if !a.alive() {
-                self.eq_analyzer = None;
-                self.eq_failed();
-            }
-            // 换歌了：解码器还连着上一首的流，必须重建（否则波形画的是上一首）
-            if let (Some(url), Some(a)) = (self.now_url.as_deref(), self.eq_analyzer.as_ref()) {
-                if a.url() != url {
-                    self.eq_analyzer = None;
-                    self.eq_seg = 0; // 换歌：段号重新从 1 数
-                }
-            }
-            if let Some(a) = self.eq_analyzer.as_ref() {
-                let _ = a;
-            }
-            if self.eq_analyzer.is_some() {
-                return;
-            }
+        if !active || self.eq_done_gen == Some(self.play_gen) {
+            return;
         }
         if let Some(t) = self.eq_hold {
             if Instant::now() < t {
