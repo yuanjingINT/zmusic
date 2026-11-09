@@ -564,7 +564,6 @@ impl PcmAnalyzer {
                 let _ = std::fs::remove_file(&path);
                 let mut buf = vec![0u8; WINDOW * 2];
                 let mut wagc = WaveAgc::new(wave_cfg, p90_db, est_cell.clone());
-                let scan_db_for_dump: Option<f32> = p90_db;
                 let gain_cell = auto_gain_cell.clone();
                 // 调试用：把每窗幅度写成 CSV（ms,amp,rms_db），默认不写
                 let mut dump = std::env::var("ZMUSIC_WAVE_DUMP").ok().and_then(|p| {
