@@ -1,10 +1,12 @@
 # zmusic
 
-网易云音乐的终端播放器。Rust + [ratatui](https://github.com/ratatui/ratatui) 写的 TUI，键盘操作，在终端里搜歌、听歌、下载。
+A terminal player for NetEase Cloud Music. Written in Rust with
+[ratatui](https://github.com/ratatui/ratatui): search, play and download from a
+keyboard-only TUI.
 
-- 播放走 `mpv`，下载走网易云 API
-- 默认参数、收藏、设置都存在 `~/.config/zmusic/`
-- 只有一个二进制，没有 Electron，没有浏览器
+- Playback goes through `mpv`, downloads go through the NetEase API
+- Defaults, favorites and settings all live in `~/.config/zmusic/`
+- One binary, no Electron, no browser
 
 ```
   ⏮  ⏯  ⏭     正在播放：晴天 - 周杰伦
@@ -14,44 +16,52 @@
   ▍专辑推荐
 ```
 
-## 依赖
+The interface itself is still Chinese; the block above is what the screen looks
+like.
 
-运行时：
+## Requirements
 
-| 依赖 | 用途 | 是否必需 |
-|------|------|----------|
-| `mpv` | 音频播放 | 必需 |
-| `node` >= 22 | 本地网易云 API 服务（`setup.sh` 起 `ncm-api`） | 必需 |
+At runtime:
 
-构建时（从源码编译）：
+| Dependency | Purpose | Required |
+|------------|---------|----------|
+| `mpv` | audio playback | yes |
+| `node` >= 22 | local NetEase API service (`setup.sh` starts `ncm-api`) | yes |
 
-| 依赖 | 用途 |
-|------|------|
-| `cargo` / `rustc`（stable，edition 2021） | 编译 |
-| C 工具链（`gcc` / `cc`） | 链接 |
-| `openssl` 头文件 + 库（Debian 系：`libssl-dev`） | `reqwest` 用 `native-tls`，经 `openssl-sys` 链接系统 OpenSSL |
-| `pkg-config` | 定位 OpenSSL |
+To build from source:
 
-> 为什么是 `native-tls` 而不是 `rustls`：ring 0.17.14 与 gcc 16 / LLVM 21 链接失败，改用系统 OpenSSL。
+| Dependency | Purpose |
+|------------|---------|
+| `cargo` / `rustc` (stable, edition 2021) | compile |
+| C toolchain (`gcc` / `cc`) | link |
+| `openssl` headers + library (Debian: `libssl-dev`) | `reqwest` uses `native-tls`, which links system OpenSSL through `openssl-sys` |
+| `pkg-config` | locate OpenSSL |
 
-Linux x86_64 / aarch64。
+> Why `native-tls` and not `rustls`: ring 0.17.14 fails to link against gcc 16 /
+> LLVM 21, so we use the system OpenSSL instead.
 
-## 安装
+Linux x86_64 / aarch64.
 
-### Arch Linux（自建仓库，公网）
+## Installation
 
-包在本机用 `makepkg` 构建、在 NAS 上 GPG 签名后发布到自建仓库 `repo.dito.asia`，包和数据库都用仓库密钥签名。
+### Arch Linux (self-hosted repo, public)
 
-> 当前仓库里是 **beta** 版（`0.1.1beta2`）：功能能跑，但还在连着改。beta 不会自动升到 `0.1.1` 正式版，正式版出来会自然盖上去。
+Packages are built on the developer's machine with `makepkg`, signed on the NAS,
+and published to the self-hosted repo `repo.dito.asia`; both the packages and
+the database carry the repo key.
 
-一键安装（自动加源、导入并本地信任公钥）：
+> The repo currently holds a **beta** (`0.1.1beta2`): it works, but it is still
+> moving. Beta releases do not upgrade to `0.1.1` automatically; the final
+> release will simply take over.
+
+One-shot install (adds the repo, imports and locally trusts the key):
 
 ```bash
 curl -fsSL https://repo.dito.asia/install-dito-repo.sh | sudo bash
 sudo pacman -S zmusic
 ```
 
-手动加源：
+Manual setup:
 
 ```ini
 [dito-repo]
@@ -66,17 +76,23 @@ sudo pacman -Sy
 sudo pacman -S zmusic
 ```
 
-> 仓库密钥指纹 `6469 F0BE B079 C3ED CC47 9476 27FE DD0D 74F7 D714`（`Dito Arch Repo <repo@dito.local>`）。
-> 密钥在 2026-11-07 重签过：之前加过源的机器需要重跑一次上面的安装脚本，否则新包验签会失败。
-> 内网可直连 NAS 回落：`Server = http://192.168.1.20:8180/x86_64`。
+> Repo key fingerprint `6469 F0BE B079 C3ED CC47 9476 27FE DD0D 74F7 D714`
+> (`Dito Arch Repo <repo@dito.local>`).
+> The key was re-signed on 2026-11-07: machines that already had the repo need to
+> run the install script once more, otherwise signature checks on new packages fail.
+> On the LAN you can fall back to the NAS directly: `Server = http://192.168.1.20:8180/x86_64`.
 
-### 预编译包
+### Prebuilt packages
 
-每次打 `v*` tag，CI 会构建 x86_64 与 aarch64 的 `.deb` / `.rpm` / Arch 包，挂在 [GitLab Releases](https://git.tuxai.org/personal/zmusic/-/releases)（和 [GitHub Releases](https://github.com/yuanjingINT/zmusic/releases) 镜像）上。Arch 用户优先用上面的 `dito-repo`。
+Every `v*` tag triggers CI to build `.deb` / `.rpm` / Arch packages for x86_64
+and aarch64 and attach them to
+[GitLab Releases](https://git.tuxai.org/personal/zmusic/-/releases) (mirrored to
+[GitHub Releases](https://github.com/yuanjingINT/zmusic/releases)). Arch users
+should prefer `dito-repo` above.
 
-### 从源码
+### From source
 
-主仓库在 GitLab，GitHub 是镜像：
+The main repo is on GitLab; GitHub is a mirror:
 
 ```bash
 git clone https://git.tuxai.org/personal/zmusic.git
@@ -85,7 +101,8 @@ cargo build --release --locked
 ./target/release/zmusic
 ```
 
-先装构建依赖（缺 OpenSSL 头文件会报 `openssl-sys` / `Could not find openssl`）：
+Install the build dependencies first (missing OpenSSL headers show up as
+`openssl-sys` / `Could not find openssl`):
 
 ```bash
 # Arch
@@ -94,136 +111,170 @@ sudo pacman -S --needed base-devel openssl pkg-config
 sudo apt install build-essential pkg-config libssl-dev
 ```
 
-### 一键脚本
+### Install script
 
 ```bash
-./install.sh    # 编译 release，装启动器到 ~/.local/bin，装桌面启动器
+./install.sh    # builds release, installs the launcher into ~/.local/bin and a desktop entry
 ```
 
-## 首次运行
+## First run
 
-播放器本身不带 API，需要本地起一个网易云 API 服务：
+The player ships without an API; you need a local NetEase API service:
 
 ```bash
-./setup.sh          # 首次安装并启动服务（systemd --user，服务名 ncm-api）
-./setup.sh update   # 更新 API 到最新版并重启
+./setup.sh          # first install and start (systemd --user, unit name ncm-api)
+./setup.sh update   # update the API to the latest version and restart
 ```
 
-> 如果 zmusic 是用 pacman 包安装的，`setup.sh` 会检测到侧车由包提供
-> （`pacman -Qo /usr/lib/zmusic/sidecar/meting.js` 成立）并**跳过源码侧车安装**：
-> 不再往 `~/.local/share/zmusic/meting` 复制旧副本，也不写用户级 unit（用户级 unit 会遮蔽
-> 包里的 `meting-sidecar.service`，导致跑旧代码、缺 `type=duration`）。发现遗留的用户级 unit
-> 时只提示怎么备份和重启，不替你删。
+> If zmusic was installed from the pacman package, `setup.sh` notices that the
+> sidecar comes with the package
+> (`pacman -Qo /usr/lib/zmusic/sidecar/meting.js` succeeds) and **skips the
+> source sidecar install**: it will not copy an old tree into
+> `~/.local/share/zmusic/meting` and will not write a user-level unit (a
+> user-level unit shadows the packaged `meting-sidecar.service`, which means
+> running stale code without `type=duration`). If it finds a leftover user-level
+> unit it only tells you how to back it up and restart — it will not delete
+> anything for you.
 
-`install.sh` 生成的启动器（`~/.local/bin/zmusic` → 仓库里的 `run.sh`）**不会联网更新**：
-它只做三件事——二进制比源码旧时增量 `cargo build --release`、`ncm-api` 没跑时
-`systemctl --user start ncm-api`、然后 `exec target/release/zmusic`。所以菜单是秒开的。
+The launcher `install.sh` generates (`~/.local/bin/zmusic` → `run.sh` in the
+repo) **never touches the network**: it only does three things — incremental
+`cargo build --release` when the binary is older than the sources,
+`systemctl --user start ncm-api` when the API is not running, then
+`exec target/release/zmusic`. That is why the menu opens instantly.
 
-想更新 API 服务时手动跑（不再挂在启动路径上）：
+Update the API by hand when you want to (it is no longer on the startup path):
 
 ```bash
 ./setup.sh update
 ```
 
-## 配置
+## Configuration
 
-所有服务/账号配置收在一个文件：`~/.config/zmusic/config.toml`。生成/编辑：
+All service and account settings live in one file:
+`~/.config/zmusic/config.toml`. Create or edit it with:
 
 ```bash
-zmusic config          # 不存在就生成模板并打开编辑器
-zmusic config --print  # 只打印路径
+zmusic config          # creates a template and opens your editor if missing
+zmusic config --print  # prints the path only
 ```
 
-完整步骤（ncm-api、Meting 侧车与 cookie、YouTube 代理、Jamendo key、每个源需要什么）
-见 [docs/CONFIG.md](docs/CONFIG.md)。
+The full walkthrough (ncm-api, the Meting sidecar and cookies, the YouTube
+proxy, the Jamendo key, what every source needs) is in
+[docs/CONFIG.md](docs/CONFIG.md).
 
-环境变量仍然生效，优先级 **环境变量 > config.toml > 默认值**：
+Environment variables still work, and win over the file:
+**env > config.toml > defaults**.
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `NCM_API` | `http://127.0.0.1:3000` | 网易云 API 地址 |
-| `NCM_DIR` | `~/Music/ncm` | 下载目录 |
-| `NCM_QUALITY` | `exhigh` | 音质：`standard` / `higher` / `exhigh` / `lossless` / `hires` |
-| `ZMUSIC_PROXY` | 空 | 可选代理，如 `socks5h://127.0.0.1:11080`；YouTube / SoundCloud 必需，见下 |
-| `ZMUSIC_METING_URL` | `http://127.0.0.1:8123` | Meting 侧车地址（腾讯/酷狗/百度/酷我） |
-| `ZMUSIC_METING_COOKIE` | 空 | 可选。Meting 换流用的平台 cookie（建议写 config.toml `[meting] cookie`），不落盘、不进日志 |
-| `ZMUSIC_YTDLP_BIN` | `yt-dlp` | yt-dlp 可执行文件名或绝对路径 |
-| `ZMUSIC_SUPERDL_DIR` | 空 | 设了就让**超级下载**直接写这个目录，跳过选盘/卸载/格式化（无 U 盘时测功能用） |
-| `ZMUSIC_WAVE_DUMP` | 空 | 调试用：把每个分析窗写成 CSV（列见 docs/CONFIG.md 第 5 节），平时别开 |
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `NCM_API` | `http://127.0.0.1:3000` | NetEase API address |
+| `NCM_DIR` | `~/Music/ncm` | download directory |
+| `NCM_QUALITY` | `exhigh` | quality: `standard` / `higher` / `exhigh` / `lossless` / `hires` |
+| `ZMUSIC_PROXY` | empty | optional proxy, e.g. `socks5h://127.0.0.1:11080`; required for YouTube / SoundCloud, see below |
+| `ZMUSIC_METING_URL` | `http://127.0.0.1:8123` | Meting sidecar address (Tencent / Kugou / Baidu / Kuwo) |
+| `ZMUSIC_METING_COOKIE` | empty | optional platform cookie used by Meting to fetch streams (prefer `[meting] cookie` in config.toml); never written to disk or logs |
+| `ZMUSIC_YTDLP_BIN` | `yt-dlp` | yt-dlp executable name or absolute path |
+| `ZMUSIC_SUPERDL_DIR` | empty | when set, **super download** writes straight into this directory and skips disk picking / unmounting / formatting (handy for testing without a USB stick) |
+| `ZMUSIC_WAVE_DUMP` | empty | debug: write every analysis window as CSV (columns in docs/CONFIG.md section 5); leave it off normally |
 
-运行时会写：
+At runtime it writes:
 
 ```
-~/.config/zmusic/favorites.json   收藏
-~/.config/zmusic/settings.json    界面与播放设置
+~/.config/zmusic/favorites.json   favorites
+~/.config/zmusic/settings.json    UI and playback settings
 ```
 
-### 音乐源一览
+### Sources at a glance
 
-`S` 键在搜索页按「国内 → 国际 → 公开免费」分组循环，选择记在 `settings.json` 里，默认仍是网易云。
-每个源的能力（支持哪些搜索类型、有没有歌词、可不可播放）由 `Source::capabilities()` 给出，
-UI 据此禁用不支持的项，不靠猜。
+In the search screen, `S` cycles through the groups "domestic → international →
+public/free"; the choice is stored in `settings.json` and defaults to NetEase.
+What each source can do (which search kinds, lyrics, playable or not) comes from
+`Source::capabilities()`, and the UI disables what is unsupported instead of
+guessing.
 
-| 源 | `Song.source` | 组 | 状态 |
-|----|---------------|----|------|
-| 网易云 | `netease` | 国内 | 默认源，搜索/播放/歌词全通 |
-| QQ 音乐（直连） | `qq` | 国内 | 免费曲目可出流；会员曲返回「不可播放」 |
-| QQ / 酷狗 / 千千 / 酷我（Meting） | `meting:tencent` `meting:kugou` `meting:baidu` `meting:kuwo` | 国内 | 走侧车；tencent/kugou 能搜、取流需 cookie；baidu/kuwo 上游返回空壳 |
-| 咪咕音乐 | `migu` | 国内 | app 侧公开接口；搜索不带时长，会员曲返回「不可播放」 |
-| YouTube | `youtube` | 国际 | `yt-dlp`，国内需代理 |
-| SoundCloud | `soundcloud` | 国际 | `yt-dlp`，国内需代理；搜索较慢（6–7s） |
-| Audius | `audius` | 公开免费 | 搜索 + 取流可用 |
-| ccMixter | `ccmixter` | 公开免费 | 搜索可用；音乐直链被站点 403，运行期尝试后降级「不可播放」 |
-| Wikimedia Commons | `wikimedia` | 公开免费 | 只解析 IPv6，网络慢时降级 |
-| Jamendo | `jamendo` | 公开免费 | 需要 `ZMUSIC_JAMENDO_CLIENT_ID`，没配就置灰 |
-| OpenGameArt | `opengameart` | 公开免费 | 抓页面，只出单曲 |
+| Source | `Song.source` | Group | Status |
+|--------|---------------|-------|--------|
+| NetEase | `netease` | domestic | default source; search / playback / lyrics all work |
+| QQ Music (direct) | `qq` | domestic | free tracks stream; member tracks report "not playable" |
+| QQ / Kugou / Qianqian / Kuwo (Meting) | `meting:tencent` `meting:kugou` `meting:baidu` `meting:kuwo` | domestic | goes through the sidecar; tencent/kugou search, streaming needs a cookie; baidu/kuwo return empty shells upstream |
+| Migu Music | `migu` | domestic | public app endpoint; search carries no duration, member tracks report "not playable" |
+| YouTube | `youtube` | international | `yt-dlp`, needs a proxy in China |
+| SoundCloud | `soundcloud` | international | `yt-dlp`, needs a proxy in China; slow search (6–7s) |
+| Audius | `audius` | public/free | search + streaming work |
+| ccMixter | `ccmixter` | public/free | search works; direct audio links are 403 from the site, so it degrades to "not playable" at runtime |
+| Wikimedia Commons | `wikimedia` | public/free | resolves IPv6 only, degrades on slow networks |
+| Jamendo | `jamendo` | public/free | needs `ZMUSIC_JAMENDO_CLIENT_ID`, greyed out otherwise |
+| OpenGameArt | `opengameart` | public/free | scrapes the page, single tracks only |
 
-没接入的（和原因，都是实测过的）：
+Not integrated (each with the reason we measured):
 
-| 源 | 原因 |
-|----|------|
-| bilibili | 曾接入（自带 web API 搜索 + yt-dlp 取流），后按需求移除：结果多是视频切片、标题噪音大，且没有稳定的音频时长；代码与注册表已删 |
-| Bandcamp | `yt-dlp` 没有 Bandcamp 的搜索前缀，只能抓网页；而 `bandcamp.com` 本机直连被重置，经海外出口拿到的是 3038 字节的 `Client Challenge` 反爬页（没有 `tralbum` 数据），`yt-dlp -g` 报 `Unable to extract tralbum data` |
-| StreetVoice | 搜索 API 通（`/api/v4/search/?q=` 返回 JSON），但播放接口 `POST /api/v4/song/<id>/play/` 恒返回 `{}`（要登录态），网页版本身回 451 地区限制——能搜不能播，先不接 |
-| JOOX | `api.joox.com` / `api-jooxtt.sanook.com` 两个域名都回 `code=-2`、`itemlist` 为空（地区/风控），拿不到可用结果 |
-| MOOV | `api.moov.hk` 直连超时，没有公开搜索接口 |
-| 汽水音乐（抖音） | `api.qishui.com/luna/pc/search/track` 回 200 但 0 字节，要 `a_bogus`/`X-Bogus` 签名；网页端是 SPA 壳，不走逆签名就不碰 |
-| Free Music Archive | 老 API 404，新接口要 key |
-| Spotify / Tidal / Qobuz / Apple Music | 官方 API 只给元数据与 30s 试听，`stream_url` 只能返回 `None`，等有账号 token 再谈 |
+| Source | Reason |
+|--------|--------|
+| bilibili | Was integrated once (its web search API plus `yt-dlp` for streaming) and removed on request: results are mostly video clips with noisy titles and no reliable audio duration; code and registry entries are gone |
+| Bandcamp | `yt-dlp` has no Bandcamp search prefix, so scraping is the only option; `bandcamp.com` is connection-reset from this machine, and through an overseas exit it returns a 3038-byte `Client Challenge` anti-bot page (no `tralbum` data), where `yt-dlp -g` reports `Unable to extract tralbum data` |
+| StreetVoice | The search API works (`/api/v4/search/?q=` returns JSON), but playback `POST /api/v4/song/<id>/play/` always returns `{}` (needs a login session), and the web player itself returns 451 for region blocking — searchable, not playable, so not wired up |
+| JOOX | Both `api.joox.com` and `api-jooxtt.sanook.com` answer `code=-2` with an empty `itemlist` (region / risk control), no usable results |
+| MOOV | `api.moov.hk` times out directly, no public search endpoint |
+| Qishui Music (Douyin) | `api.qishui.com/luna/pc/search/track` returns 200 with zero bytes and needs `a_bogus` / `X-Bogus` signatures; the web client is an SPA shell, and we do not reverse signatures |
+| Free Music Archive | the old API is 404, the new one needs a key |
+| Spotify / Tidal / Qobuz / Apple Music | official APIs only give metadata and 30s previews, `stream_url` can only return `None`; revisit when there are account tokens |
 
-### 源探测与聚合
+### Probing and aggregation
 
-启动时 zmusic 会在后台并发探测所有源（并发 4、每源一次最小请求），**不进渲染/按键路径**，
-所以界面不会等探测。顶栏会显示 `探测中 3/15`，探测完变成 `源 9/15`。
+On startup zmusic probes every source concurrently in the background (4 at a
+time, one minimal request each). It **stays off the render / key path**, so the
+UI never waits for probing. The top bar shows `探测中 3/15` while probing and
+`源 9/15` afterwards.
 
-- `R` 键手动重探（同样在后台，界面不卡，大写 R，避免和小写搜索词冲突）
-- 搜索页列表区：还没搜索时整块显示**逐行的源状态**（`● 网易云  ok` / `○ YouTube  代理未配置` /
-  `⚠ 酷狗(Meting)  仅搜索（无 cookie）`），末尾 `14/16 可用 · R 重探`；
-  有结果时状态收进列表标题右侧（`搜索结果   源 14/16`）
-- `V` 键在「搜索结果 ↔ 源状态明细」之间切换；`a` 切换 `S` 循环范围（只看可用 / 含离线）
-- 探测结果缓存 10 分钟；缺 key（如 Jamendo）和侧车没起标「需凭据」，网络挂了标「离线」，两者不混
+- `R` probes again manually (also in the background; uppercase so it never
+  collides with typing a lowercase search term)
+- Search screen, list area: before any search the panel shows **one line per
+  source** (the UI strings are Chinese: `● 网易云  ok` / `○ YouTube  代理未配置` /
+  `⚠ 酷狗(Meting)  仅搜索（无 cookie）`), ending with `14/16 可用 · R 重探`;
+  once there are results the status folds into the list header
+  (`搜索结果   源 14/16`)
+- `V` toggles between "search results ↔ source detail"; `a` switches what the
+  `S` cycle covers (available only / including offline)
+- Probe results are cached for 10 minutes; a missing key (Jamendo) or a stopped
+  sidecar is reported as "needs credentials", a dead network as "offline" — the
+  two are never conflated
 
-**没有时长的不进列表**：搜索/聚合结果里 `dt <= 0` 的曲目直接丢弃（没有进度条、点了才知道
-能不能放）。Meting 搜索不带时长，会在源内先并发补前 12 条再过滤；懒补时长补完仍为 0 的同样不显示。
+**No duration, no listing**: tracks with `dt <= 0` are dropped from search and
+aggregated results (no progress bar, and you only find out it cannot play after
+clicking). Meting search carries no duration, so those sources first fetch the
+first 12 tracks concurrently and then filter; tracks still at 0 after the lazy
+fetch are hidden as well.
 
-**能搜 ≠ 能播**：`Capabilities::can_stream` 标明一个源能不能出流。聚合只把 `can_stream=true`
-的源并进来；没配 cookie 的 Meting、上游只回空壳的源在列表里标「仅搜索」（红色），不塞进播放队列。
-单源搜索时这类结果照样能看，点播放会提示「这首来自『仅搜索』的源」。
+**Searchable ≠ playable**: `Capabilities::can_stream` says whether a source can
+produce a stream. Aggregation only merges sources with `can_stream=true`; Meting
+without a cookie, and sources whose upstream returns empty shells, are marked
+"search only" (red) in the list and never enter the playback queue. With a
+single source selected those results are still listed, and pressing play shows
+"this one comes from a search-only source".
 
-取不到播放地址时（会员曲、直链过期、源失效）不会停在「标题变了没声音」：后台记下这首、
-按播放顺序跳到下一首能播的，顶栏给出 `跳过无法播放: X（源）→ 接着放 Y`；
-连续跳 5 首还没播上就停下并提示。随机模式下不会反复撞同一首。
+When no playable URL can be obtained (member tracks, expired direct links, dead
+sources) it does not sit there with a changed title and no sound: the track is
+recorded in the background, playback skips to the next playable track in the
+current order, and the top bar shows
+`跳过无法播放: X（源）→ 接着放 Y`; after 5 consecutive skips it stops and says
+so. In shuffle mode it will not keep hitting the same track.
 
-搜索页最前面是 **聚合** 伪源：把关键词并发发给所有可用源（并发 4、每源 5s），
-超时的源会写在状态行 `失败源: …`，不影响其它源。聚合只做歌曲搜索，播放仍按每条结果的
-`Song.source` 派发。
+The very first entry in the search screen is the **aggregate** pseudo-source: it
+fans the keywords out to every available source (4 at a time, 5s each). Timed-out
+sources are listed on the status line as `失败源: …` and do not affect the
+others. Aggregation only searches songs; playback still dispatches on each
+result's `Song.source`.
 
-聚合搜索的执行细节：并发上限 24（这台机器 24 核，纯 I/O 不抢 CPU），会 fork 子进程的源
-（`yt-dlp` / `bilibili`）单独限 2 个并发；每个源的 HTTP 调用 6s 超时、建连 2s；
-`(源, 关键词)` 结果缓存 60 秒（`R` 重探会清空），改一个字再改回来不会重新打接口。
-启动时会预热一次网易云搜索，避免第一次搜索卡在它的上游冷启动上。
+How the aggregated search runs: up to 24 concurrent sources (this machine has 24
+cores and the work is pure I/O), sources that fork child processes (`yt-dlp` /
+`bilibili`) are limited to 2; each source gets a 6s HTTP timeout and a 2s connect
+timeout; `(source, keywords)` results are cached for 60 seconds (`R` clears it),
+so fixing a typo and going back does not hit the APIs again. A NetEase search is
+warmed up once at startup so the first search does not pay its upstream cold
+start.
 
-排序与代表源按固定优先级（`source_priority`）：
+Ordering and the representative source follow a fixed priority
+(`source_priority`):
 
 ```
 netease > qq > meting:tencent > meting:kugou > meting:baidu > meting:kuwo
@@ -231,208 +282,241 @@ netease > qq > meting:tencent > meting:kugou > meting:baidu > meting:kuwo
         > audius > ccmixter > jamendo > wikimedia > opengameart
 ```
 
-- 注册顺序 = `S` 循环顺序 = 这个优先级，网易云永远第一
-- 聚合结果按优先级稳定排序（同源内保持接口返回顺序），网易云的歌排最前
-- 同一首（歌名 + 主歌手）只留一行，**代表源取优先级最高的那条**（后到的网易云会顶掉先到的咪咕）；
-  源列把所有命中的源按优先级并列显示，如 `网易云+QQ(直连)`
+- registration order = `S` cycle order = this priority; NetEase is always first
+- aggregated results keep this order stably (within a source, the API order is
+  preserved), so NetEase tracks come first
+- the same track (title + primary artist) appears once, **represented by the
+  highest-priority hit** (a later NetEase result displaces an earlier Migu one);
+  the source column lists every matched source in priority order, e.g.
+  `网易云+QQ(直连)`
 
-### yt-dlp 源（YouTube / SoundCloud）与代理
+### yt-dlp sources (YouTube / SoundCloud) and the proxy
 
-YouTube 和 SoundCloud 共用一个 adapter（`src/source/ytdlp.rs`，按 `Site` 参数化），都走 `yt-dlp` 子进程。
-**国内直连都不通，需要代理**：
+YouTube and SoundCloud share one adapter (`src/source/ytdlp.rs`, parameterised by
+`Site`) and both go through a `yt-dlp` child process. **Neither is reachable
+directly from China; they need a proxy**:
 
 ```bash
-# 例：借一台海外机器开 SOCKS5
+# example: borrow an overseas box for a SOCKS5 tunnel
 ssh -f -N -D 127.0.0.1:11080 your-vps
 ZMUSIC_PROXY=socks5h://127.0.0.1:11080 zmusic
 ```
 
-关键约束：**zmusic 与 mpv 必须走同一个出口**。googlevideo 的直链把签名绑在出口 IP 上，
-换 IP 就 403。具体实现：
+The hard constraint: **zmusic and mpv must leave through the same IP**.
+googlevideo binds the signature to the exit IP, so switching IPs yields 403. In
+practice:
 
-- `yt-dlp` 侧直接收 `--proxy`
-- mpv 的 `--http-proxy` 只认 HTTP 代理，不认 SOCKS；所以配成 `socks5(h)://` 时，
-  zmusic 会在本机起一个只监听 `127.0.0.1` 的小桥（HTTP CONNECT → SOCKS5），
-  只给 yt-dlp 系的曲目（`youtube` / `soundcloud`）用；播放其它源时自动清空，回到直连
-- 配成 `http://…` 时原样交给 mpv，不起桥
+- `yt-dlp` is passed `--proxy` directly
+- mpv's `--http-proxy` only understands HTTP proxies, not SOCKS; so when the
+  proxy is `socks5(h)://`, zmusic starts a small local bridge (HTTP CONNECT →
+  SOCKS5) listening on `127.0.0.1` only, used for tracks from `youtube` /
+  `soundcloud`; for other sources it is cleared again and playback goes direct
+- with an `http://…` proxy it is handed to mpv as-is and no bridge is started
 
-`yt-dlp` 不在 PATH、代理挂了、或超时：该源报错并置灰，其它源不受影响。`yt-dlp` 系源的搜索
-结果按 `(源, 关键词)` 缓存 5 分钟，取流地址**不缓存**（会过期）。
+If `yt-dlp` is missing from PATH, the proxy is down, or it times out, that source
+errors and is greyed out while the others keep working. Search results for
+yt-dlp sources are cached per `(source, keywords)` for 5 minutes; stream URLs
+are **not** cached (they expire).
 
-冒烟测试（真跑 `yt-dlp`，默认 ignore）：
+Smoke test (runs the real `yt-dlp`, ignored by default):
 
 ```bash
 ZMUSIC_LIVE_PROXY=socks5h://127.0.0.1:11080 cargo test --release ytdlp_live -- --ignored --nocapture
 ```
 
-### Meting 侧车（腾讯 / 酷狗 / 百度 / 酷我）
+### Meting sidecar (Tencent / Kugou / Baidu / Kuwo)
 
-国内这几家用 `sidecar/meting.js`（Node + `@meting/core`）统一承接，只监听 `127.0.0.1:8123`：
+These domestic platforms are handled by `sidecar/meting.js` (Node + `@meting/core`),
+listening on `127.0.0.1:8123` only:
 
 ```bash
-cd sidecar && npm i && node meting.js        # 或在仓库根跑 ./setup.sh，会装成 systemd --user
+cd sidecar && npm i && node meting.js        # or run ./setup.sh from the repo root, which installs it as systemd --user
 ```
 
-Rust 侧注册成四个源：`QQ 音乐 (Meting)` / `酷狗 (Meting)` / `千千/百度 (Meting)` / `酷我 (Meting)`；
-`ZMUSIC_METING_URL` 可改地址（默认 `http://127.0.0.1:8123`）。侧车没起或装不上，这组源整体置灰，
-不影响网易云和其它源。QQ 另有直连源（标 `QQ 音乐 (直连)`）作回退。
+On the Rust side they register as four sources: `QQ 音乐 (Meting)` /
+`酷狗 (Meting)` / `千千/百度 (Meting)` / `酷我 (Meting)`. `ZMUSIC_METING_URL`
+changes the address (default `http://127.0.0.1:8123`). If the sidecar is not
+running or cannot be installed, this whole group is greyed out and NetEase and
+the other sources are unaffected. QQ also has a direct source
+(`QQ 音乐 (直连)`) as a fallback.
 
-装了包之后侧车是 `disabled` 的，要开机自启：
+After installing from the package the sidecar is `disabled`; enable it:
 
 ```bash
 systemctl --user enable --now meting-sidecar.service
 ```
 
-#### 可选：cookie（会员/受限曲目换流用）
+#### Optional: cookie (for member / restricted tracks)
 
-tencent/kugou 的搜索不需要登录，但取流对很多曲目要平台 cookie。zmusic 只接受从**环境变量**
-读到的 cookie（`ZMUSIC_METING_COOKIE`，或侧车自己的 `METING_COOKIE`），不会写盘、不会进日志：
+Searching tencent/kugou needs no login, but many tracks need a platform cookie to
+stream. zmusic only accepts a cookie from **environment variables**
+(`ZMUSIC_METING_COOKIE`, or the sidecar's own `METING_COOKIE`); it never writes
+it to disk or into logs:
 
 ```bash
-# 临时用（当前 shell）
+# temporary (current shell)
 export ZMUSIC_METING_COOKIE='uin=o0123456; qm_keyst=...'
-# 常驻：写进 600 的环境文件，由 systemd 读（unit 里已配 EnvironmentFile）
+# persistent: a 0600 env file read by systemd (the unit already sets EnvironmentFile)
 mkdir -p ~/.config/zmusic && install -m 600 /dev/null ~/.config/zmusic/meting.env
 printf 'METING_COOKIE=%s\n' 'uin=...; qm_keyst=...' > ~/.config/zmusic/meting.env
 systemctl --user restart meting-sidecar
 ```
 
-cookie 从浏览器开发者工具里复制（目标站点已登录状态下，任意请求的 `Cookie` 请求头）。
-**用自己账号的 cookie，风险自担**：它等价于该账号的登录态，别外借、别提交进仓库。
+Copy the cookie from your browser's devtools (`Cookie` request header on any
+request while logged in to the target site). **Using your own account cookie is
+at your own risk**: it is equivalent to a logged-in session, so do not share it
+and never commit it.
 
-#### 均衡器（真频谱）
+#### Equalizer (real audio)
 
-正在播放页的频谱来自**真实音频**：程序会另起一个隐藏的 mpv 进程，用
-`--ao=pcm` 把同一首歌解码成 8kHz 单声道 PCM 写到临时 FIFO，再按实时速度消费、
-用 Goertzel 算 12 个对数频段的能量（终端够宽 16 段、窄于 80 列 8 段），
-按下表映射成 3–5 行高的柱状图：
+The waveform on the now-playing screen comes from the **actual audio**: zmusic
+starts a hidden mpv process that decodes the same track with `--ao=pcm` into an
+8 kHz mono PCM FIFO, consumes it at real-time pace, and draws a symmetric braille
+waveform (2×4 dots per character cell, solid fill). Columns whose amplitude is
+below one dot stay blank, so quiet passages are empty rather than a flat line.
 
-- 对数映射（dB），低频不会一响就顶满
-- attack 0.65 / release 0.12，起得快落得慢
-- 峰值保持 0.5 秒后用 `▔` 标出并匀速下落
-- 颜色分三档（低/中/高），一眼能看出强弱
+- per-song automatic gain: one value for the whole track, no pumping; the first
+  play uses the fixed gain while the decoder collects the track's loudness, and
+  from the second play on the cached calibration is applied from the first second
+  (see docs/CONFIG.md section 5 for the numbers and how they are measured)
+- attack 0.65 / release 0.12: rises fast, falls slow
+- three colour tiers (low / mid / high) so intensity is readable at a glance
 
-**代价**：同一首歌会**再拉一次流**（多一份带宽与解码），所以它只在「正在播放页
-且确实在播放」时运行，切页/暂停/停止立刻杀掉解码进程（不留孤儿 mpv）。
+**Cost**: the same track is **streamed a second time** (extra bandwidth and
+decoding), so this only runs while the now-playing screen is visible and
+playback is actually running; switching screens, pausing or stopping kills the
+decoder process immediately (no orphaned mpv).
 
-配置：
+Settings:
 
-| 配置 | 默认 | 说明 |
-|------|------|------|
-| `[ui] equalizer` | `true` | 总开关，关掉零重绘 |
-| `[ui] equalizer_fps` | `30` | 5–60，播放页的重绘帧率 |
-| `[ui] equalizer_source` | `pcm` | `pcm` 真频谱；`synth` 不拉流的慢呼吸示意波形（省流量用） |
-| `[ui] eq_reference_dbfs` | `-6` | 波形满高对应的 dBFS，越小越容易顶满 |
-| `[ui] eq_autogain` | `true` | 逐曲自动增益：切歌时另起一个测速解码把整曲响度算出来，4 秒斜坡一次到位；首听多下一次整首音频 |
-| `[ui] eq_gain` | `1.6` | 固定增益那套映射的倍率（测速还没回来时的观感）；标定到位后由标定说了算 |
-| `[ui] eq_soft_clip` | `true` | 软限幅（tanh）：响的地方挤向顶部但不硬切，平顶更少 |
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `[ui] equalizer` | `true` | master switch, off means no redraws at all |
+| `[ui] equalizer_fps` | `30` | 5–60, redraw rate on the playing screen |
+| `[ui] equalizer_source` | `pcm` | `pcm` real audio; `synth` a slow breathing placeholder that streams nothing (saves bandwidth) |
+| `[ui] eq_reference_dbfs` | `-6` | dBFS that maps to full height; lower means it saturates sooner |
+| `[ui] eq_autogain` | `true` | per-song automatic gain: one value for the whole song, applied from the second play, no extra traffic |
+| `[ui] eq_gain` | `1.6` | gain multiplier for the fixed mapping used on the first play (the calibration takes over once it is known) |
+| `[ui] eq_soft_clip` | `true` | soft clipping (tanh): loud passages squeeze towards the top instead of hard clipping |
 
-波形以中线上下对称、实心填充（braille 点阵，一个字符格 2×4 个点）；幅度不足 1 个点的列整列留白，所以静音段是一片空白、不画中线。
-`ZMUSIC_EQ_REF_DBFS` / `ZMUSIC_EQ_GAIN` / `ZMUSIC_EQ_SOFT_CLIP` / `ZMUSIC_EQ_FPS` 可临时覆盖（见 docs/CONFIG.md 第 5 节的真值和量法）。
+`ZMUSIC_EQ_REF_DBFS` / `ZMUSIC_EQ_GAIN` / `ZMUSIC_EQ_SOFT_CLIP` /
+`ZMUSIC_EQ_AUTOGAIN` / `ZMUSIC_EQ_FPS` override these temporarily (see
+docs/CONFIG.md section 5 for the real values and how to measure them).
 
-#### 超级下载
+#### Super download
 
-超级下载（菜单「设备」→ 选可移动盘）会格式化目标盘再往里灌热榜歌曲。取流失败的处理：
-`/song/url/v1` 返回的 `code!=200` 或拿不到可播流时（会员曲、无版权、第三方兜底死链），
-**跳过该曲并继续下一首**，不会写盘、也不会留下 `.part` 文件；失败的曲目在日志里标
-「跳过(无播放链接)」。设 `ZMUSIC_SUPERDL_DIR=<目录>` 可跳过格式化直接写入该目录，
-用于没有 U 盘时验证这条路径。
+Super download (menu → "Devices" → pick a removable disk) formats the target and
+then writes the charts onto it. Failure handling: when `/song/url/v1` returns
+`code!=200` or no playable stream (member tracks, unlicensed tracks, dead
+third-party fallbacks), it **skips the track and continues with the next one**,
+writes nothing and leaves no `.part` files; the log marks it
+`跳过(无播放链接)`. Setting `ZMUSIC_SUPERDL_DIR=<dir>` skips formatting and
+writes into that directory instead, which is how this path is tested without a
+USB stick.
 
-#### 时长
+#### Duration
 
-Meting 的搜索接口不给时长，列表里先显示 `--:--`；选中或播放时补问一次（`type=duration`），
-补到了就刷新。腾讯能补（实测 `晴天` → 269s），酷狗的 `playInfo` 对未授权 hash 恒返回
-`timeLength=0`，这类就一直是 `--:--`。
+The Meting search API returns no duration, so the list shows `--:--` first and
+asks again (`type=duration`) when a track is selected or played, refreshing once
+it arrives. Tencent answers (measured: `晴天` → 269s); Kugou's `playInfo` always
+returns `timeLength=0` for unauthenticated hashes, so those stay at `--:--`.
 
-## 快捷键
+## Key bindings
 
-| 键 | 作用 |
-|----|------|
-| `0`–`6` | 主菜单直达对应项（菜单编号从 0 开始） |
-| `h` | 回主菜单 |
-| `s` | 搜索 |
-| `Tab` | 搜索页：输入栏 ↔ 结果列表 切换焦点 |
-| `S` | 搜索页：在**可用**源之间循环（第一个是「聚合」；`V` 打开全部） |
-| `R` | 重新探测所有源（后台，不卡界面） |
-| `V` | 搜索页：源列表 只列可用 / 列全部 切换 |
-| `F1`–`F4` / `Alt+0`–`3` | 搜索页：切搜索类型（歌曲 / 歌手 / 歌单 / 专辑），两种焦点下都可用 |
-| `g` | 下载列表 |
-| `v` | 正在播放界面 |
-| `Enter` | 播放选中项 |
-| `Space` | 播放 / 暂停 |
-| `n` / `p` | 下一首 / 上一首 |
-| `j` / `k`、`↑` / `↓` | 上下移动 |
-| `d` | 下载选中项 |
-| `D` | 批量下载 |
-| `l` | 收藏 / 取消收藏 |
-| `x` | 从收藏移除 |
-| `A` | 打开所选歌曲的专辑 |
-| `t` | 收藏页切换视图 |
-| `-` / `=` | 音量 −5 / +5 |
-| `0` `1` `2` `3` | 菜单里的快捷选择；搜索页列表聚焦时切类型（输入栏聚焦时是普通输入） |
-| `Esc` | 关闭弹层；否则回上一页（逐层后退，已在主菜单时不动） |
-| `q` | 退出 |
+| Key | Action |
+|-----|--------|
+| `0`–`6` | jump to that main-menu entry (numbering starts at 0) |
+| `h` | back to the main menu |
+| `s` | search |
+| `Tab` | search screen: toggle focus between the input and the result list |
+| `S` | search screen: cycle through **available** sources (the first is "aggregate"; `V` shows all) |
+| `R` | re-probe every source (background, never blocks the UI) |
+| `V` | search screen: toggle the source list between available-only and all |
+| `F1`–`F4` / `Alt+0`–`3` | search screen: switch search kind (songs / artists / playlists / albums), works from either focus |
+| `g` | download list |
+| `v` | now playing |
+| `Enter` | play the selected item |
+| `Space` | play / pause |
+| `n` / `p` | next / previous |
+| `j` / `k`, `↑` / `↓` | move up / down |
+| `d` | download the selected item |
+| `D` | batch download |
+| `l` | favorite / unfavorite |
+| `x` | remove from favorites |
+| `A` | open the album of the selected song |
+| `t` | toggle the view on the favorites screen |
+| `-` / `=` | volume −5 / +5 |
+| `Esc` | close an overlay; otherwise go back one screen (never quits, and does nothing on the main menu) |
+| `q` | quit |
 
-## 项目结构
+## Project layout
 
 ```
 src/
-  api.rs        网易云 API 客户端
-  config.rs     环境变量与路径
-  downloader.rs 下载（含批量）
-  favorites.rs  收藏读写
-  models.rs     数据结构
-  player.rs     mpv 控制（Unix socket）
-  superdl.rs    批量下载队列
-  settings.rs   设置持久化
-  ui/           ratatui 界面（screens / theme）
-  util.rs       杂项
-PKGBUILD        Arch 打包
-packaging/      nfpm 打包配置（deb / rpm / Arch）
-.github/workflows/build.yml   CI：多架构构建 + 打包 + 发 Release
+  api.rs        NetEase API client
+  config.rs     environment variables and paths
+  downloader.rs downloads (including batches)
+  favorites.rs  favorites I/O
+  models.rs     data structures
+  player.rs     mpv control (Unix socket)
+  superdl.rs    batch download queue
+  settings.rs   persisted settings
+  ui/           ratatui UI (screens / theme)
+  util.rs       misc helpers
+PKGBUILD        Arch packaging
+packaging/      nfpm packaging config (deb / rpm / Arch)
+.github/workflows/build.yml   CI: multi-arch build + packaging + Release
 ```
 
-## 构建与打包
+## Building and packaging
 
-Arch 仓库里的包是本机构建、NAS 签名的，不走 CI：
+Packages in the Arch repo are built locally and signed on the NAS; CI is not
+involved:
 
 ```bash
-makepkg -s           # 需要 base-devel + openssl（PKGBUILD 已声明）
-# 产物 zmusic-<ver>-<rel>-x86_64.pkg.tar.zst，签名入库由发布脚本处理
+makepkg -s           # needs base-devel + openssl (declared in PKGBUILD)
+# output: zmusic-<ver>-<rel>-x86_64.pkg.tar.zst; the release script signs and adds it
 ```
 
-发版两条硬规矩：
+Two hard rules for releases:
 
-- **`pkgrel` 必须递增**。版本号完全相同时 pacman 不会升级，只提示“重装”，已经装过旧包的人永远拿不到新包。
-- `PKGBUILD` 的 `_commit` 要指向 GitLab 上**已推送**的 commit，并同步重算 `sha256sums`；本地没推的 commit 归档会 404。
+- **`pkgrel` must increase.** With an identical version pacman will not upgrade,
+  it only offers a reinstall, so people who already have the old package never
+  get the new one.
+- The `PKGBUILD` `_commit` must point at a commit that is **already pushed** to
+  GitLab, and `sha256sums` must be recomputed to match; archiving an unpushed
+  commit returns 404.
 
-CI（`.github/workflows/build.yml`）只产出给非 Arch 用户的便携包，push / PR / tag 都跑：
+CI (`.github/workflows/build.yml`) only produces portable packages for non-Arch
+users, on push / PR / tag:
 
-1. `x86_64`（ubuntu-latest）和 `aarch64`（ubuntu-24.04-arm）两个架构各编译一次
-2. 装 `libssl-dev` + `pkg-config`（`native-tls` 需要），`cargo build --release --locked`
-3. 用 [nfpm](https://github.com/goreleaser/nfpm) 打成 `.deb` / `.rpm` / Arch 包；`nfpm.yaml` 里 `${GOARCH}` / `${VERSION}` 由 workflow 显式注入，不靠默认值
-4. 打 tag 时自动挂到 GitHub Release（GitLab Release 用 tag + API 建，正文放 sha256 / 指纹 / 仓库地址）
+1. build once per architecture: `x86_64` (ubuntu-latest) and `aarch64` (ubuntu-24.04-arm)
+2. install `libssl-dev` + `pkg-config` (needed by `native-tls`), then `cargo build --release --locked`
+3. package `.deb` / `.rpm` / Arch with [nfpm](https://github.com/goreleaser/nfpm); `${GOARCH}` and `${VERSION}` in `nfpm.yaml` are injected explicitly by the workflow, never left to defaults
+4. on a tag, attach the artifacts to the GitHub Release (GitLab Releases are created through the tag + API, with sha256 / fingerprint / repo URL in the body)
 
-## 版本记录
+## Changelog
 
-| 版本 | 变更 |
-|------|------|
-| 0.1.1beta2 | 修自动连播只切歌不出声：keep-open 下 mpv 播完停在暂停态，自动连播现在显式解暂停；手动切歌与切音质仍保持原暂停状态 |
-| 0.1.1beta1 | 底部提示按页面显示；`i` 键当前歌曲弹窗（收藏/下载/音质/播放顺序）；播完自动下一首（顺序/随机/单曲循环）；下载音质跟随运行期设置 |
-| 0.1.0-2 | 许可证改 GPL-3.0，依赖修正（`openssl` 必需、`mpv`/`nodejs` 可选），TLS 换 native-tls |
-| 0.1.0-1 | 首个公开版本 |
+| Version | Changes |
+|---------|---------|
+| 0.1.1beta2 | Fix auto-advance switching tracks without sound: with keep-open mpv ends paused, so auto-advance now unpauses explicitly; manual track changes and quality switches keep the previous paused state |
+| 0.1.1beta1 | Per-screen hint bar; `i` opens the current-track popup (favorite / download / quality / play order); auto-advance when a track ends (sequential / shuffle / repeat-one); download quality follows the runtime setting |
+| 0.1.0-2 | License changed to GPL-3.0, dependency fixes (`openssl` required, `mpv` / `nodejs` optional), TLS switched to native-tls |
+| 0.1.0-1 | first public release |
 
-## 许可证
+## License
 
 [GPL-3.0](LICENSE)
 
-### 端到端起播脚本（开发用）
+### End-to-end play script (development)
 
 ```bash
-# 需要先开一个 tmux 会话跑 zmusic，然后：
-scripts/play-e2e.sh <会话名> '晴天 周杰伦' 40
+# start zmusic inside a tmux session first, then:
+scripts/play-e2e.sh <session> '晴天 周杰伦' 40
 ```
 
-按屏幕状态驱动（等结果行带时长 → 确认列表焦点 → 等「正在播放」出现），不靠
-`sleep` 猜；搜索遇到「源暂不可用」会自动按 `R` 重新探测再重搜；失败时把整屏原文
-存到 `/tmp/zb-fail-*.txt`。动播放相关代码时跑一遍，别靠人肉点。
+It drives the UI by screen state (wait for a result row with a duration → make
+sure the list has focus → wait for "now playing"), instead of guessing with
+`sleep`; when the search hits "source unavailable" it presses `R`, re-probes and
+searches again; on failure it dumps the whole screen to `/tmp/zb-fail-*.txt`.
+Run it whenever you touch playback code instead of clicking through by hand.
