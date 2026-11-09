@@ -136,3 +136,17 @@ mod tests {
         assert_eq!(truncate("网易云音乐", 8), "网易云…");
     }
 }
+
+/// 按终端显示宽度左补空格（右对齐）：中文/emoji 不会把列撑歪
+pub fn pad_left(s: &str, width: usize) -> String {
+    let w = s.width();
+    if w >= width {
+        return truncate(s, width);
+    }
+    let mut out = String::with_capacity(s.len() + (width - w));
+    for _ in 0..(width - w) {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}

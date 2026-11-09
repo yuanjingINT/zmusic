@@ -77,6 +77,10 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
         ),
     ]);
     items.push(ListItem::new(loc_line));
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled("配色:      ", theme::song_title()),
+        Span::styled(theme::palette_name(), theme::dim()),
+    ])));
     if app.settings_usb_loading && app.settings_usb.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             "  (正在检测 U盘...)",
@@ -212,7 +216,11 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
     let mut spans: Vec<Span> = Vec::with_capacity(5);
     spans.push(Span::styled(
         if st.paused { " ⏸ " } else { " ▶ " },
-        theme::primary(),
+        if st.paused {
+            theme::dim()
+        } else {
+            theme::playing()
+        },
     ));
     match &app.now_playing {
         Some(s) => {
@@ -235,14 +243,13 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
     if let Some(idx) = app.queue_idx {
         let _ = write!(meta_buf, "   [{} / {}]", idx + 1, app.queue.len());
     }
-    spans.push(Span::styled(meta_buf.as_str(), theme::dim()));
     let line1 = Line::from(spans);
     let ratio = match (st.time_pos, dur) {
         (Some(t), Some(d)) if d > 0.0 => (t / d).clamp(0.0, 1.0),
         _ => 0.0,
     };
     let gauge = Gauge::default()
-        .gauge_style(Style::new().fg(ratatui::style::Color::Cyan))
+        .gauge_style(theme::gauge_style())
         .ratio(ratio)
         .label(format!("{:.1}%", ratio * 100.0));
     let mut hint_spans = Vec::with_capacity(2);
@@ -258,9 +265,6 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
     } else {
         String::new()
     };
-    if !sel_buf.is_empty() {
-        hint_spans.push(Span::styled(sel_buf.as_str(), theme::dim()));
-    }
     let hints = Line::from(hint_spans);
     let [r1, r2, r3] = Layout::vertical([
         Constraint::Length(1),
@@ -268,13 +272,39 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
         Constraint::Length(1),
     ])
     .areas(area);
-    f.render_widget(Paragraph::new(line1), r1);
+    // 状态栏分区：左=播放状态/歌名，右=时间·音量·队列（右对齐，不被长歌名挤掉）
+    let meta_w = (UnicodeWidthStr::width(meta_buf.as_str()) as u16).min(r1.width);
+    let [left, right] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(meta_w)]).areas(r1);
+    f.render_widget(Paragraph::new(line1), left);
+    f.render_widget(
+        Paragraph::new(
+            Line::from(Span::styled(meta_buf.as_str(), theme::dim())).alignment(Alignment::Right),
+        ),
+        right,
+    );
     // 正在播放页自己有一条带时间/总长的进度条，底栏再画一条就重复了
+    let render_hint_row = |f: &mut Frame, row: Rect| {
+        if sel_buf.is_empty() {
+            f.render_widget(Paragraph::new(hints), row);
+            return;
+        }
+        let sel_w = (UnicodeWidthStr::width(sel_buf.as_str()) as u16).min(row.width);
+        let [l, r] = Layout::horizontal([Constraint::Min(0), Constraint::Length(sel_w)]).areas(row);
+        f.render_widget(Paragraph::new(hints), l);
+        f.render_widget(
+            Paragraph::new(
+                Line::from(Span::styled(sel_buf.as_str(), theme::primary()))
+                    .alignment(Alignment::Right),
+            ),
+            r,
+        );
+    };
     if app.screen == crate::ui::ScreenKind::NowPlaying {
-        f.render_widget(Paragraph::new(hints), r2);
+        render_hint_row(f, r2);
     } else {
         f.render_widget(gauge, r2);
-        f.render_widget(Paragraph::new(hints), r3);
+        render_hint_row(f, r3);
     }
 }
 
@@ -835,7 +865,7 @@ fn render_source_details(f: &mut Frame, area: Rect, app: &mut App) {
     let mut rows: Vec<ListItem> = Vec::with_capacity(items.len() + 2);
     for (i, it) in items.iter().enumerate() {
         let reason = app.source_reason(it);
-        let line = status::truncate(&status::detail_line(it, &reason), width);
+        let line = crate::ui::status::truncate(&status::detail_line(it, &reason), width);
         let mut style = match status::tone_of(it) {
             Tone::Good => theme::good(),
             Tone::Warn => theme::warn(),
@@ -850,7 +880,7 @@ fn render_source_details(f: &mut Frame, area: Rect, app: &mut App) {
         rows.push(ListItem::new(Line::from(Span::styled(line, style))));
     }
     rows.push(ListItem::new(Line::from(Span::styled(
-        status::truncate(&format!("{suffix} · R 重探 · V 返回结果"), width),
+        crate::ui::status::truncate(&format!("{suffix} · R 重探 · V 返回结果"), width),
         theme::dim(),
     ))));
     let mut state = ListState::default();
@@ -876,8 +906,25 @@ fn render_song_table(
 ) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
+        .border_style(theme::border_style(true))
         .title(Span::styled(title, theme::title()));
     let inner = block.inner(area);
+    // 列宽按实际可用宽度算：中文窄终端也不会把「来源」挤没，长标题用 … 收尾
+    let cols: usize = if tag.is_some() { 7 } else { 6 };
+    let fixed: usize = 3 + 4 + 6; // 选 / # / 时长
+    let src_w: usize = if tag.is_some() { 16 } else { 0 };
+    let flex = (inner.width as usize)
+        .saturating_sub(fixed + src_w + (cols - 1))
+        .max(24);
+    let (name_w, artist_w, album_w) = if tag.is_some() {
+        let n = (flex * 40 / 100).max(8);
+        let a = (flex * 28 / 100).max(6);
+        (n, a, flex.saturating_sub(n + a).max(6))
+    } else {
+        let n = (flex * 44 / 100).max(10);
+        let a = (flex * 28 / 100).max(8);
+        (n, a, flex.saturating_sub(n + a).max(8))
+    };
     let (top, count) = window(sel, songs.len(), inner.height as usize);
     let rows: Vec<Row> = songs
         .iter()
@@ -893,26 +940,33 @@ fn render_song_table(
             let mut cells = vec![
                 Cell::from(mark),
                 Cell::from(Span::styled(format!("{:>3}", top + i + 1), theme::dim())),
-                Cell::from(s.name.as_str()),
-                Cell::from(util::artists_of(&s.ar)),
+                Cell::from(crate::ui::status::truncate(&s.name, name_w)),
+                Cell::from(crate::ui::status::truncate(
+                    &util::artists_of(&s.ar),
+                    artist_w,
+                )),
             ];
             if let Some(f) = tag {
                 let (name, can_stream) = f(s);
+                let label = if can_stream {
+                    name
+                } else {
+                    format!("{name}·仅搜")
+                };
                 cells.push(Cell::from(Span::styled(
+                    crate::ui::status::pad_left(&label, src_w.saturating_sub(2)) + " ",
                     if can_stream {
-                        name
-                    } else {
-                        format!("{name} 仅搜索")
-                    },
-                    if can_stream {
-                        theme::dim()
+                        theme::source_tag()
                     } else {
                         theme::warn()
                     },
                 )));
             }
-            cells.push(Cell::from(s.al.name.as_str()));
-            cells.push(Cell::from(util::fmt_time(Some(s.dt as f64 / 1000.0))));
+            cells.push(Cell::from(crate::ui::status::truncate(&s.al.name, album_w)));
+            cells.push(Cell::from(Span::styled(
+                format!("{:>6}", util::fmt_time(Some(s.dt as f64 / 1000.0))),
+                theme::dim(),
+            )));
             Row::new(cells)
         })
         .collect();
@@ -921,30 +975,41 @@ fn render_song_table(
     } else {
         vec!["选", "#", "歌名", "歌手", "专辑", "时长"]
     };
-    let header = Row::new(headers.into_iter().map(Cell::from)).style(theme::title());
-    let widths: Vec<Constraint> = if tag.is_some() {
-        vec![
-            Constraint::Length(3),
-            Constraint::Length(4),
-            Constraint::Min(12),
-            Constraint::Min(8),
-            Constraint::Length(18),
-            Constraint::Min(8),
-            Constraint::Length(6),
-        ]
-    } else {
-        vec![
-            Constraint::Length(3),
-            Constraint::Length(4),
-            Constraint::Min(14),
-            Constraint::Min(10),
-            Constraint::Min(10),
-            Constraint::Length(6),
-        ]
-    };
+    let header_cells: Vec<Cell> = headers
+        .iter()
+        .map(|h| {
+            let right = *h == "源" || *h == "时长";
+            let w = match *h {
+                "源" => src_w.saturating_sub(2),
+                "时长" => 4,
+                _ => 0,
+            };
+            if right {
+                Cell::from(Span::styled(
+                    crate::ui::status::pad_left(h, w) + " ",
+                    theme::title(),
+                ))
+            } else {
+                Cell::from(Span::styled(*h, theme::title()))
+            }
+        })
+        .collect();
+    let header = Row::new(header_cells);
+    let mut widths: Vec<Constraint> = vec![
+        Constraint::Length(3),
+        Constraint::Length(4),
+        Constraint::Length(name_w as u16),
+        Constraint::Length(artist_w as u16),
+    ];
+    if tag.is_some() {
+        widths.push(Constraint::Length(src_w as u16));
+    }
+    widths.push(Constraint::Length(album_w as u16));
+    widths.push(Constraint::Length(6));
     let mut ts = TableState::default();
     ts.select(Some(sel.saturating_sub(top)));
     let table = Table::new(rows, widths)
+        .style(theme::fg())
         .header(header)
         .block(block)
         .row_highlight_style(theme::highlight());
@@ -971,7 +1036,7 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         _ => 0.0,
     };
     let gauge = Gauge::default()
-        .gauge_style(Style::new().fg(ratatui::style::Color::Cyan))
+        .gauge_style(theme::gauge_style())
         .ratio(ratio)
         .label(format!(
             "{} / {}",
