@@ -88,9 +88,13 @@ struct Ui {
     #[serde(default)]
     fade: Option<bool>,
     #[serde(default)]
+    theme: Option<String>,
+    #[serde(default)]
     equalizer_fps: Option<u8>,
     #[serde(default)]
     wave_spacing: Option<u8>,
+    #[serde(default)]
+    wave_vpad: Option<u8>,
     #[serde(default)]
     equalizer_source: Option<String>,
     #[serde(default)]
@@ -127,6 +131,8 @@ pub struct Animations {
     pub equalizer_fps: u8,
     /// 波形水平间距：每隔几个点列画一列（1 = 密，2–3 = 留白）
     pub wave_spacing: u8,
+    /// 波形上下各留几行空白（0–2）
+    pub wave_vpad: u8,
     /// 频谱来源：pcm / synth
     pub equalizer_source: EqSource,
     /// 自动增益标定（默认开）
@@ -151,6 +157,7 @@ impl Default for Animations {
             fade: true,
             equalizer_fps: 30,
             wave_spacing: 2,
+            wave_vpad: 1,
             equalizer_source: EqSource::Pcm,
             eq_agc: true,
             eq_reference_dbfs: -6.0,
@@ -218,6 +225,14 @@ struct FileConfig {
     jamendo: Jamendo,
     #[serde(default)]
     ui: Ui,
+    #[serde(default)]
+    superdl: Option<SuperDlSection>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SuperDlSection {
+    #[serde(default)]
+    pub dir: Option<String>,
 }
 
 pub struct Config {
@@ -325,6 +340,23 @@ impl Config {
             Some(v) => expand_tilde(&v, home),
             None => home.join("Music").join("ncm"),
         };
+        // [ui] theme = "mono" → 供 theme.rs 读取（真彩/256/单色三档里的单色）
+        if std::env::var("ZMUSIC_SUPERDL_DIR").is_err() {
+            if let Some(t) = parsed.superdl.as_ref().and_then(|s| s.dir.as_deref()) {
+                let t = t.trim();
+                if !t.is_empty() {
+                    std::env::set_var("ZMUSIC_SUPERDL_DIR", t);
+                }
+            }
+        }
+        if std::env::var("ZMUSIC_THEME").is_err() {
+            if let Some(t) = parsed.ui.theme.as_deref() {
+                let t = t.trim();
+                if !t.is_empty() {
+                    std::env::set_var("ZMUSIC_THEME", t);
+                }
+            }
+        }
         Config {
             download_dir,
             quality: pick("NCM_QUALITY", parsed.general.quality, "exhigh"),
@@ -350,6 +382,7 @@ impl Config {
                 equalizer_fps: pick_u8(env, "ZMUSIC_EQ_FPS", parsed.ui.equalizer_fps, 30),
                 wave_spacing: pick_u8(env, "ZMUSIC_WAVE_SPACING", parsed.ui.wave_spacing, 2)
                     .clamp(1, 6),
+                wave_vpad: parsed.ui.wave_vpad.unwrap_or(1).min(2),
                 eq_agc: pick_bool(env, "ZMUSIC_EQ_AGC", parsed.ui.eq_agc, true),
                 eq_reference_dbfs: pick_f32(
                     env,

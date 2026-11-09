@@ -5,6 +5,7 @@ mod models;
 mod player;
 mod proxy;
 mod settings;
+mod settings_ui;
 mod source;
 mod superdl;
 mod ui;
@@ -87,7 +88,8 @@ fn print_help() {
          \n\
          用法:\n\
          \x20 zmusic            启动播放器\n\
-         \x20 zmusic config     生成（如缺）并打开 ~/.config/zmusic/config.toml\n\
+         \x20 zmusic config     打开设置界面（外观/波形/下载目录）\n\
+         \x20 zmusic config --edit   直接用 $EDITOR 编辑 config.toml\n\
          \x20 zmusic config --print  只打印配置文件路径\n\
          \x20 zmusic --help / -V\n\
          \n\
@@ -95,13 +97,17 @@ fn print_help() {
     );
 }
 
-/// `zmusic config [--print]`：确保配置文件存在，默认用 $EDITOR/$VISUAL/vi 打开
+/// `zmusic config`：默认打开交互设置界面；
+/// `--print` 只打印路径；`--edit` 用 $EDITOR 直接编辑文件。
 fn config_cli(rest: &[String]) -> anyhow::Result<()> {
     let cfg = config::Config::load();
     let path = cfg.ensure_config_file()?;
     if rest.iter().any(|a| a == "--print") {
         println!("{}", path.display());
         return Ok(());
+    }
+    if !rest.iter().any(|a| a == "--edit") {
+        return settings_ui::run(&cfg);
     }
     let editor = std::env::var("EDITOR")
         .or_else(|_| std::env::var("VISUAL"))

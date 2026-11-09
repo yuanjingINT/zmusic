@@ -60,6 +60,13 @@ impl Theme {
         if no_color || dumb {
             return Theme::mono();
         }
+        // 配置里选了单色（[ui] theme = "mono" → ZMUSIC_THEME），走单色调色板
+        if get("ZMUSIC_THEME")
+            .map(|v| v.eq_ignore_ascii_case("mono"))
+            .unwrap_or(false)
+        {
+            return Theme::mono();
+        }
         let truecolor = get("COLORTERM")
             .map(|v| {
                 let v = v.to_ascii_lowercase();
