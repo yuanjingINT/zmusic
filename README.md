@@ -50,9 +50,9 @@ Packages are built on the developer's machine with `makepkg`, signed on the NAS,
 and published to the self-hosted repo `repo.dito.asia`; both the packages and
 the database carry the repo key.
 
-> The repo currently holds a **beta** (`0.1.1beta2`): it works, but it is still
-> moving. Beta releases do not upgrade to `0.1.1` automatically; the final
-> release will simply take over.
+> The repo currently holds the first stable release, **`0.1.1`** (`0.1.1-2`).
+> `0.1.1-1` was withdrawn — it crashed on first run when `~/.config/zmusic` did
+> not exist yet — so `0.1.1-2` is the one to install.
 
 One-shot install (adds the repo, imports and locally trusts the key):
 
@@ -119,6 +119,16 @@ sudo apt install build-essential pkg-config libssl-dev
 
 ## First run
 
+On the very first start zmusic opens a short setup wizard: interface language
+(Chinese / English), theme, waveform on/off, download folder and audio quality.
+Press `Enter` to move on or `Esc` to skip with the defaults; either way the
+answers are written to `config.toml` together with `first_run_done = true`, so
+upgrading users never see it again. Bring it back with `zmusic config --wizard`.
+
+The language choice is real, not just a stored string: menus, titles, the
+settings screen, hints, toasts and error messages switch with it, and the wizard
+redraws immediately when you change it.
+
 The player ships without an API; you need a local NetEase API service:
 
 ```bash
@@ -151,12 +161,19 @@ Update the API by hand when you want to (it is no longer on the startup path):
 ## Configuration
 
 All service and account settings live in one file:
-`~/.config/zmusic/config.toml`. Create or edit it with:
+`~/.config/zmusic/config.toml`. Most of them can be changed without touching
+TOML:
 
 ```bash
-zmusic config          # creates a template and opens your editor if missing
-zmusic config --print  # prints the path only
+zmusic config            # interactive settings screen (j/k, h/l, Enter; s saves, q saves & quits)
+zmusic config --edit     # open the raw file in $EDITOR
+zmusic config --print    # print the path only
+zmusic config --wizard   # re-run the first-run wizard
 ```
+
+The settings screen covers theme, waveform on/off, spacing and padding,
+animations, spinner, download folder, super-download folder, quality and
+language — most take effect immediately, the theme after a restart.
 
 The full walkthrough (ncm-api, the Meting sidecar and cookies, the YouTube
 proxy, the Jamendo key, what every source needs) is in
@@ -398,6 +415,8 @@ Settings:
 | `[ui] eq_autogain` | `true` | per-song automatic gain: one value for the whole song, applied from the second play, no extra traffic |
 | `[ui] eq_gain` | `1.6` | gain multiplier for the fixed mapping used on the first play (the calibration takes over once it is known) |
 | `[ui] eq_soft_clip` | `true` | soft clipping (tanh): loud passages squeeze towards the top instead of hard clipping |
+| `[ui] wave_spacing` | `2` | gap between waveform rows: 1 dense / 2 default / 3 airy |
+| `[ui] wave_vpad` | `1` | blank rows above and below the waveform |
 
 `ZMUSIC_EQ_REF_DBFS` / `ZMUSIC_EQ_GAIN` / `ZMUSIC_EQ_SOFT_CLIP` /
 `ZMUSIC_EQ_AUTOGAIN` / `ZMUSIC_EQ_FPS` override these temporarily (see
@@ -499,6 +518,7 @@ users, on push / PR / tag:
 
 | Version | Changes |
 |---------|---------|
+| 0.1.1 | First stable release. Startup 243 ms → 125 ms (2.05 MB binary); braille waveform driven by the real audio, no flat-topping, adjustable spacing and padding; per-track automatic gain (measured on the first play, applied from the second, zero extra traffic); first-run wizard and Chinese/English UI; interactive `zmusic config`; fixes: NetEase single-source could not open album/playlist/artist details, the waveform decoder re-downloaded the whole track at the end of a song (+50% traffic), unplayable search results failed silently. `0.1.1-1` withdrawn (crashed on first run with no `~/.config/zmusic`) |
 | 0.1.1beta2 | Fix auto-advance switching tracks without sound: with keep-open mpv ends paused, so auto-advance now unpauses explicitly; manual track changes and quality switches keep the previous paused state |
 | 0.1.1beta1 | Per-screen hint bar; `i` opens the current-track popup (favorite / download / quality / play order); auto-advance when a track ends (sequential / shuffle / repeat-one); download quality follows the runtime setting |
 | 0.1.0-2 | License changed to GPL-3.0, dependency fixes (`openssl` required, `mpv` / `nodejs` optional), TLS switched to native-tls |
