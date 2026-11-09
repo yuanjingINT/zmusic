@@ -352,6 +352,19 @@ impl DotGrid {
         }
     }
 
+    /// 带水平间距的波形：每 `spacing` 个点列画一列，中间留白。
+    /// 用户要「间距拉大」——不是把柱子画粗，而是让波形之间有空气。
+    pub fn wave_spaced(&mut self, amps: &[f32], spacing: usize) {
+        let step = spacing.max(1);
+        for (i, a) in amps.iter().enumerate() {
+            let c = i * step;
+            if c >= self.cols {
+                break;
+            }
+            self.set_wave_column(c, *a);
+        }
+    }
+
     /// 一个 braille 字符格里「离中线最远的点」的归一化距离（0 = 中线，1 = 上下边）
     pub fn cell_distance(&self, cell_col: usize, cell_row: usize) -> f32 {
         let half = (self.rows / 2).max(1) as f32;

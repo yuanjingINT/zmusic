@@ -90,6 +90,8 @@ struct Ui {
     #[serde(default)]
     equalizer_fps: Option<u8>,
     #[serde(default)]
+    wave_spacing: Option<u8>,
+    #[serde(default)]
     equalizer_source: Option<String>,
     #[serde(default)]
     eq_agc: Option<bool>,
@@ -123,6 +125,8 @@ pub struct Animations {
     pub fade: bool,
     /// 均衡器帧率，5–60，默认 30
     pub equalizer_fps: u8,
+    /// 波形水平间距：每隔几个点列画一列（1 = 密，2–3 = 留白）
+    pub wave_spacing: u8,
     /// 频谱来源：pcm / synth
     pub equalizer_source: EqSource,
     /// 自动增益标定（默认开）
@@ -146,6 +150,7 @@ impl Default for Animations {
             smooth_progress: true,
             fade: true,
             equalizer_fps: 30,
+            wave_spacing: 2,
             equalizer_source: EqSource::Pcm,
             eq_agc: true,
             eq_reference_dbfs: -6.0,
@@ -343,6 +348,8 @@ impl Config {
                 smooth_progress: parsed.ui.smooth_progress.unwrap_or(true),
                 fade: parsed.ui.fade.unwrap_or(true),
                 equalizer_fps: pick_u8(env, "ZMUSIC_EQ_FPS", parsed.ui.equalizer_fps, 30),
+                wave_spacing: pick_u8(env, "ZMUSIC_WAVE_SPACING", parsed.ui.wave_spacing, 2)
+                    .clamp(1, 6),
                 eq_agc: pick_bool(env, "ZMUSIC_EQ_AGC", parsed.ui.eq_agc, true),
                 eq_reference_dbfs: pick_f32(
                     env,

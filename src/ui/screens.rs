@@ -1132,10 +1132,18 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
                 app.wave.sync(&tail, seq, cols * 2);
             }
         }
-        let amps = app.wave.snapshot(cols * 2);
+        // 水平间距：每隔 `wave_spacing` 个点列画一列，中间留白。
+        // 用户要的是「间距拉大」——让波形之间有空气，而不是把柱子画粗。
+        let spacing = app.anim.wave_spacing.max(1) as usize;
+        let span = (cols * 2) / spacing;
+        let amps = app.wave.snapshot(span);
         if crate::ui::spectrum::braille_ok() {
             let mut grid = crate::ui::spectrum::DotGrid::new(cols * 2, rows_n * 4);
-            grid.wave(&amps);
+            if spacing > 1 {
+                grid.wave_spaced(&amps, spacing);
+            } else {
+                grid.wave(&amps);
+            }
             let cells = grid.to_braille();
             for (r, line) in cells.iter().enumerate() {
                 let spans: Vec<Span> = line
