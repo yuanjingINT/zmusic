@@ -46,7 +46,9 @@ equalizer = true
 smooth_progress = true
 fade = true
 # 均衡器帧率（5-30，默认 15，和播放时的事件循环节奏对齐）
-equalizer_fps = 15
+equalizer_fps = 30
+# 均衡器数据来源：pcm = 真解码取频谱（多一份带宽）；synth = 正弦波形（不额外拉流）
+equalizer_source = "pcm"
 
 [jamendo]
 # Jamendo 免费申请的 client_id（https://devportal.jamendo.com/）
@@ -75,6 +77,17 @@ struct Ui {
     fade: Option<bool>,
     #[serde(default)]
     equalizer_fps: Option<u8>,
+    #[serde(default)]
+    equalizer_source: Option<String>,
+}
+
+/// 均衡器数据来源
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EqSource {
+    /// 真解码取 PCM 算频谱（默认）
+    Pcm,
+    /// 正弦波形兜底（不额外拉流）
+    Synth,
 }
 
 /// 动效开关：总开关 + 每个动效单独开关，全部默认开。
@@ -86,8 +99,10 @@ pub struct Animations {
     pub equalizer: bool,
     pub smooth_progress: bool,
     pub fade: bool,
-    /// 均衡器帧率，5–30，默认 15
+    /// 均衡器帧率，5–60，默认 30
     pub equalizer_fps: u8,
+    /// 频谱来源：pcm / synth
+    pub equalizer_source: EqSource,
 }
 
 impl Default for Animations {
@@ -98,7 +113,8 @@ impl Default for Animations {
             equalizer: true,
             smooth_progress: true,
             fade: true,
-            equalizer_fps: 15,
+            equalizer_fps: 30,
+            equalizer_source: EqSource::Pcm,
         }
     }
 }
@@ -279,7 +295,13 @@ impl Config {
                 equalizer: parsed.ui.equalizer.unwrap_or(true),
                 smooth_progress: parsed.ui.smooth_progress.unwrap_or(true),
                 fade: parsed.ui.fade.unwrap_or(true),
-                equalizer_fps: pick_u8(env, "ZMUSIC_EQ_FPS", parsed.ui.equalizer_fps, 15),
+                equalizer_fps: pick_u8(env, "ZMUSIC_EQ_FPS", parsed.ui.equalizer_fps, 30),
+                equalizer_source: match pick("ZMUSIC_EQ_SOURCE", parsed.ui.equalizer_source, "pcm")
+                    .as_str()
+                {
+                    "synth" => EqSource::Synth,
+                    _ => EqSource::Pcm,
+                },
             },
         }
     }

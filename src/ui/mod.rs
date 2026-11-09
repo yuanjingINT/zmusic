@@ -1,4 +1,5 @@
 pub mod anim;
+pub mod eq;
 mod hints;
 mod nav;
 mod playback;
@@ -189,6 +190,13 @@ pub struct App {
     anim: crate::config::Animations,
     /// 切歌淡入的起点
     fade_start: Option<Instant>,
+    /// 真频谱解码器（只在正在播放页 + 播放时存在）
+    eq_analyzer: Option<crate::ui::eq::PcmAnalyzer>,
+    /// 解码失败次数 / 是否已降级到正弦兜底
+    eq_fail: u32,
+    eq_fallback: bool,
+    /// 当前播放的流地址（频谱解码要重拉一次）
+    now_url: Option<String>,
     favorites: Favorites,
     tx: Sender<AppMsg>,
     rx: Receiver<AppMsg>,
@@ -332,6 +340,10 @@ impl App {
             last_mpv_error: 0,
             anim,
             fade_start: None,
+            eq_analyzer: None,
+            eq_fail: 0,
+            eq_fallback: false,
+            now_url: None,
             source_id: if !settings.source.is_empty()
                 && (settings.source == AGGREGATE_ID || registry.get(&settings.source).is_some())
             {
@@ -658,6 +670,7 @@ impl App {
 
     fn tick(&mut self) {
         let st = self.player.state();
+        self.sync_eq(&st);
         // mpv 加载失败（403/失效链接/解码不了）必须让用户看见，并自动跳到下一首
         if st.error_seq != self.last_mpv_error {
             self.last_mpv_error = st.error_seq;
@@ -690,6 +703,47 @@ impl App {
             if t.elapsed() > Duration::from_secs(3) {
                 self.toast = None;
             }
+        }
+    }
+
+    /// 真频谱解码器的生命周期：只在「正在播放页 + 真在播放 + pcm 档」时存在，
+    /// 切页/暂停/停止立刻 drop（Drop 里 kill 子进程、删 FIFO，不留孤儿）。
+    fn sync_eq(&mut self, st: &crate::player::MpvState) {
+        let playing = self.now_playing.is_some() && !st.idle && !st.paused;
+        let want = self.anim.equalizer_on()
+            && self.anim.equalizer_source == crate::config::EqSource::Pcm
+            && !self.eq_fallback
+            && self.screen == ScreenKind::NowPlaying
+            && playing;
+        if !want {
+            self.eq_analyzer = None;
+            return;
+        }
+        if let Some(a) = self.eq_analyzer.as_mut() {
+            if !a.alive() {
+                self.eq_analyzer = None;
+                self.eq_failed();
+            }
+            return;
+        }
+        let Some(url) = self.now_url.clone() else {
+            return;
+        };
+        match crate::ui::eq::PcmAnalyzer::start(&url, st.time_pos.unwrap_or(0.0)) {
+            Some(a) => self.eq_analyzer = Some(a),
+            None => self.eq_failed(),
+        }
+    }
+
+    /// 连续两次解码失败就降级成正弦波形，只 toast 一次，不死磕
+    fn eq_failed(&mut self) {
+        self.eq_fail += 1;
+        if self.eq_fail >= 2 && !self.eq_fallback {
+            self.eq_fallback = true;
+            self.toast = Some((
+                "频谱解码失败，已降级为正弦波形（[ui] equalizer_source=synth）".to_string(),
+                Instant::now(),
+            ));
         }
     }
 
@@ -1020,6 +1074,7 @@ impl App {
                         match url {
                             Some(u) => {
                                 self.skip_streak = 0;
+                                self.now_url = Some(u.clone());
                                 // 换源成功：把队列/正在播放这首歌的条目改成真正用的源，
                                 // 让「源」列、i 弹窗、收藏都反映实际来源
                                 if let Some((src, s_id)) = used {
