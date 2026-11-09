@@ -1076,6 +1076,13 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         song.al.name,
         crate::source::source_display(&song.source)
     );
+    // 逐曲自动增益：让用户看到「这首歌被调了多少」，异常歌好排查（暂停后保留最后的值）
+    let auto_gain = if app.anim.eq_autogain && app.anim.equalizer_on() {
+        app.eq_auto_ref
+            .map(|r| format!("  自动 {:+.1} dB", r - crate::ui::eq::NEUTRAL_REF_DB))
+    } else {
+        None
+    };
     let ratio = match (st.time_pos, st.duration) {
         (Some(t), Some(d)) if d > 0.0 => (t / d).clamp(0.0, 1.0),
         _ => 0.0,
@@ -1100,8 +1107,15 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         Paragraph::new(Line::from(Span::styled(title, title_style)).alignment(Alignment::Center)),
         ti,
     );
+    let sub_line = match auto_gain {
+        Some(g) => Line::from(vec![
+            Span::styled(sub, theme::dim()),
+            Span::styled(g, theme::dim()),
+        ]),
+        None => Line::from(Span::styled(sub, theme::dim())),
+    };
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(sub, theme::dim())).alignment(Alignment::Center)),
+        Paragraph::new(sub_line).alignment(Alignment::Center),
         ar,
     );
 

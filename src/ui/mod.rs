@@ -37,6 +37,21 @@ use std::time::{Duration, Instant};
 /// 聚合伪源：搜索时并发问所有 `Ok` 的源再合并
 pub const AGGREGATE_ID: &str = "aggregate";
 
+/// 打不开详情时的提示文案（纯函数，方便单测）。
+///
+/// 单源网易云是**能**打开详情的情况，永远不该走到这里；只有聚合里没有网易云条目、
+/// 或者当前源压根没有详情接口（咪咕/QQ 等）才会用这条文案。
+pub fn detail_unsupported_msg(source_id: &str, what: &str) -> String {
+    if source_id == AGGREGATE_ID {
+        format!("这个{what}没有网易云的条目，打不开详情（按 S 换源试试）")
+    } else {
+        format!(
+            "{}源暂不支持{what}详情，按 S 换到网易云或聚合再打开",
+            crate::source::source_display(source_id)
+        )
+    }
+}
+
 /// 主菜单；编号从 0 开始（数字键 0–6 直达）。配置统一进 `config.toml`，不再有设置页入口。
 pub const MENU_ITEMS: [&str; 7] = [
     "搜索音乐",
@@ -200,6 +215,12 @@ pub struct App {
     wave: crate::ui::spectrum::WaveRing,
     /// 跳转后等播放位置稳定再重开解码器（否则会拿过期的位置去解码）
     eq_hold: Option<Instant>,
+    /// 这首歌已冻结的满高基准（给界面显示「自动 +X dB」）
+    eq_auto_ref: Option<f32>,
+    /// 逐曲响度缓存：歌曲 key → p90 dB（存 ~/.cache/zmusic/eq_gain.json）
+    eq_cache: std::collections::HashMap<String, f32>,
+    /// 缓存是否已从磁盘读过
+    eq_cache_loaded: bool,
     /// 当前播放的流地址（频谱解码要重拉一次）
     now_url: Option<String>,
     favorites: Favorites,
@@ -348,6 +369,9 @@ impl App {
             eq_analyzer: None,
             wave: crate::ui::spectrum::WaveRing::new(),
             eq_hold: None,
+            eq_auto_ref: None,
+            eq_cache: std::collections::HashMap::new(),
+            eq_cache_loaded: false,
             eq_fail: 0,
             eq_fallback: false,
             now_url: None,
@@ -715,6 +739,67 @@ impl App {
 
     /// 真频谱解码器的生命周期：只在「正在播放页 + 真在播放 + pcm 档」时存在，
     /// 切页/暂停/停止立刻 drop（Drop 里 kill 子进程、删 FIFO，不留孤儿）。
+    /// 逐曲响度缓存文件：~/.cache/zmusic/eq_gain.json
+    fn eq_cache_path() -> Option<std::path::PathBuf> {
+        dirs::cache_dir().map(|d| d.join("zmusic").join("eq_gain.json"))
+    }
+
+    fn ensure_eq_cache(&mut self) {
+        if self.eq_cache_loaded {
+            return;
+        }
+        self.eq_cache_loaded = true;
+        let Some(path) = Self::eq_cache_path() else {
+            return;
+        };
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, f32>>(&raw) {
+                self.eq_cache = map;
+            }
+        }
+    }
+
+    fn save_eq_cache(&self) {
+        let Some(path) = Self::eq_cache_path() else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(raw) = serde_json::to_string(&self.eq_cache) {
+            let _ = std::fs::write(&path, raw);
+        }
+    }
+
+    /// 当前这首歌的缓存 key：`源|曲目id`
+    fn eq_cache_key(&mut self) -> Option<String> {
+        self.ensure_eq_cache();
+        self.now_playing
+            .as_ref()
+            .map(|s| format!("{}|{}", s.source, s.s_id))
+    }
+
+    /// 解码线程估出 p90 后写进缓存（同一首只写一次，差 0.5 dB 以上才更新）
+    fn absorb_eq_estimate(&mut self) {
+        let Some(p90) = self.eq_analyzer.as_ref().and_then(|a| a.estimated_p90()) else {
+            return;
+        };
+        let Some(key) = self.eq_cache_key() else {
+            return;
+        };
+        // 只往「更响」的方向更新：静音前奏估出来的低 p90 不能把缓存锁死，
+        // 副歌听到更响的段落时要把它顶上去
+        let changed = self
+            .eq_cache
+            .get(&key)
+            .map(|v| p90 > v + 1.0)
+            .unwrap_or(true);
+        if changed {
+            self.eq_cache.insert(key, p90);
+            self.save_eq_cache();
+        }
+    }
+
     fn sync_eq(&mut self, st: &crate::player::MpvState) {
         let playing = self.now_playing.is_some() && !st.idle && !st.paused;
         let want = self.anim.equalizer_on()
@@ -731,6 +816,19 @@ impl App {
                 self.eq_analyzer = None;
                 self.eq_failed();
             }
+            // 换歌了：解码器还连着上一首的流，必须重建（否则波形画的是上一首）
+            if let (Some(url), Some(a)) = (self.now_url.as_deref(), self.eq_analyzer.as_ref()) {
+                if a.url() != url {
+                    self.eq_analyzer = None;
+                    self.eq_auto_ref = None;
+                }
+            }
+            if let Some(a) = self.eq_analyzer.as_ref() {
+                if self.anim.eq_autogain {
+                    self.eq_auto_ref = Some(a.ref_db());
+                }
+            }
+            self.absorb_eq_estimate();
             // 和「解码器自己该到的位置」比，差 2 秒以上才算用户拖动过
             if let (Some(pos), Some(a)) = (st.time_pos, self.eq_analyzer.as_ref()) {
                 if (pos - a.expected_pos()).abs() > 2.0 {
@@ -757,8 +855,12 @@ impl App {
             reference_dbfs: self.anim.eq_reference_dbfs,
             gain: self.anim.eq_gain,
             soft_clip: self.anim.eq_soft_clip,
+            autogain: self.anim.eq_autogain,
         };
-        match crate::ui::eq::PcmAnalyzer::start(&url, st.time_pos.unwrap_or(0.0), wave_cfg) {
+        // 逐曲响度：缓存命中就直接用（第二次听零延迟）；没命中就边放边估
+        let key = self.eq_cache_key();
+        let cached = key.as_ref().and_then(|k| self.eq_cache.get(k).copied());
+        match crate::ui::eq::PcmAnalyzer::start(&url, st.time_pos.unwrap_or(0.0), wave_cfg, cached) {
             Some(a) => self.eq_analyzer = Some(a),
             None => self.eq_failed(),
         }
@@ -1103,6 +1205,10 @@ impl App {
                         match url {
                             Some(u) => {
                                 self.skip_streak = 0;
+                                // 换了一首（或同一首换了源）：重新做逐曲响度估计
+                                if self.now_url.as_deref() != Some(u.as_str()) {
+                                    self.eq_auto_ref = None;
+                                }
                                 self.now_url = Some(u.clone());
                                 // 换源成功：把队列/正在播放这首歌的条目改成真正用的源，
                                 // 让「源」列、i 弹窗、收藏都反映实际来源
@@ -2152,6 +2258,26 @@ impl App {
         (crate::source::source_display(&s.source), can)
     }
 
+    /// 打开专辑/歌单/歌手详情时用哪个 id：
+    ///
+    /// - 单源网易云：条目自己的 id 就能打开（**这才是唯一能打开的情况**，之前正好判反了）
+    /// - 聚合：从候选里按优先级挑网易云的
+    /// - 其它单源：这些源没有详情接口 → None，调用方提示换源
+    fn detail_id(
+        &self,
+        own_id: i64,
+        map: &std::collections::HashMap<String, Vec<(String, i64)>>,
+        key: &str,
+    ) -> Option<i64> {
+        if self.source_id == "netease" {
+            return Some(own_id);
+        }
+        if self.source_id == AGGREGATE_ID {
+            return self.pick_candidate(map, key);
+        }
+        None
+    }
+
     /// 候选里按源优先级挑第一个「能打开详情」的：目前只有网易云的详情接口
     fn pick_candidate(
         &self,
@@ -2169,11 +2295,9 @@ impl App {
             .map(|(_, id)| *id)
     }
 
+    /// 打不开详情时的提示：按当前源给出下一步，而不是笼统说「只有网易云能打开」
     fn only_netease_toast(&mut self, what: &str) {
-        self.toast = Some((
-            format!("这个{what}只有网易云能打开详情（其它源暂无接口）"),
-            Instant::now(),
-        ));
+        self.toast = Some((detail_unsupported_msg(&self.source_id, what), Instant::now()));
     }
 
     /// 某一行（歌/歌手/歌单/专辑）命中的源，按优先级并列；聚合模式才用
@@ -2340,12 +2464,22 @@ impl App {
             }
             ScreenKind::Albums => {
                 if let Some(a) = self.albums.get(self.albums_sel) {
-                    self.open_album(a.id);
+                    let key = health::album_key(a);
+                    let own = a.id;
+                    match self.detail_id(own, &self.agg_album_candidates, &key) {
+                        Some(id) => self.open_album(id),
+                        None => self.only_netease_toast("专辑"),
+                    }
                 }
             }
             ScreenKind::Playlists => {
                 if let Some(pl) = self.playlists.get(self.playlists_sel) {
-                    self.open_playlist(pl.id);
+                    let key = health::playlist_key(pl);
+                    let own = pl.id;
+                    match self.detail_id(own, &self.agg_playlist_candidates, &key) {
+                        Some(id) => self.open_playlist(id),
+                        None => self.only_netease_toast("歌单"),
+                    }
                 }
             }
             ScreenKind::Library => {
@@ -2392,9 +2526,10 @@ impl App {
             1 => {
                 if let Some(a) = self.search_artists.get(self.search_sel) {
                     let key = health::artist_key(a);
-                    let id = self.pick_candidate(&self.agg_artist_candidates, &key);
-                    match id {
-                        Some(id) => self.open_artist(id, a.name.clone()),
+                    let own = a.id;
+                    let name = a.name.clone();
+                    match self.detail_id(own, &self.agg_artist_candidates, &key) {
+                        Some(id) => self.open_artist(id, name),
                         None => self.only_netease_toast("歌手"),
                     }
                 }
@@ -2402,7 +2537,8 @@ impl App {
             2 => {
                 if let Some(p) = self.search_playlists.get(self.search_sel) {
                     let key = health::playlist_key(p);
-                    match self.pick_candidate(&self.agg_playlist_candidates, &key) {
+                    let own = p.id;
+                    match self.detail_id(own, &self.agg_playlist_candidates, &key) {
                         Some(id) => self.open_playlist(id),
                         None => self.only_netease_toast("歌单"),
                     }
@@ -2411,7 +2547,8 @@ impl App {
             3 => {
                 if let Some(a) = self.search_albums.get(self.search_sel) {
                     let key = health::album_key(a);
-                    match self.pick_candidate(&self.agg_album_candidates, &key) {
+                    let own = a.id;
+                    match self.detail_id(own, &self.agg_album_candidates, &key) {
                         Some(id) => self.open_album(id),
                         None => self.only_netease_toast("专辑"),
                     }
@@ -2873,5 +3010,22 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detail_toast_points_to_the_next_action() {
+        // 非网易云单源：告诉用户按 S 换源，而不是「只有网易云能打开」这种误导
+        let m = detail_unsupported_msg("migu", "专辑");
+        assert!(m.contains("暂不支持专辑详情"), "{m}");
+        assert!(m.contains("按 S 换到网易云或聚合"), "{m}");
+        // 聚合：说明是没有网易云条目，而不是源不支持
+        let a = detail_unsupported_msg(AGGREGATE_ID, "歌单");
+        assert!(a.contains("没有网易云的条目"), "{a}");
+        assert!(!a.contains("暂不支持"), "{a}");
     }
 }

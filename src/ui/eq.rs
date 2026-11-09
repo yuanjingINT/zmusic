@@ -243,6 +243,42 @@ struct WaveBuf {
     seq: u64,
 }
 
+/// 自动增益：把这首歌的 p90 窗峰值映射到 8/9 点（留 1 点余量防削顶）
+const AUTO_TARGET_FRAC: f32 = 8.0 / 9.0;
+/// 扫描没回来前的中性基准（-12 dBFS），避免一开始就冲顶
+pub const NEUTRAL_REF_DB: f32 = -12.0;
+/// 从 ao=pcm 写出的 WAV 里读每窗峰值（16bit 单声道，8kHz）
+fn wav_window_peaks(bytes: &[u8], window: usize) -> Vec<f32> {
+    // 跳过 RIFF 头：找 "data" 块
+    let mut off = 0usize;
+    if bytes.len() > 12 && &bytes[0..4] == b"RIFF" {
+        let mut i = 12;
+        while i + 8 <= bytes.len() {
+            let id = &bytes[i..i + 4];
+            let size = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]])
+                as usize;
+            if id == b"data" {
+                off = i + 8;
+                break;
+            }
+            i += 8 + size + (size & 1);
+        }
+    }
+    let pcm = &bytes[off..];
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + window * 2 <= pcm.len() {
+        let mut peak = 0.0f32;
+        for k in 0..window {
+            let v = i16::from_le_bytes([pcm[i + k * 2], pcm[i + k * 2 + 1]]) as f32 / 32768.0;
+            peak = peak.max(v.abs());
+        }
+        out.push(peak);
+        i += window * 2;
+    }
+    out
+}
+
 /// 波形纵向标定：**窗内峰值 + 固定基准**，基准只以极慢速度微调。
 ///
 /// 为什么不用「近 10 秒 p95 / 峰值保持」做归一化：那等于每首歌自己归一化，
@@ -250,23 +286,26 @@ struct WaveBuf {
 /// 固定基准（-9 dBFS，约等于流行乐副歌峰值）时实测安静 p50=0.09、副歌 p50=0.76，
 /// 这才是「安静一条线、副歌占满」。基准只按 0.1 dB/s 往下漂（下限 -22 dBFS），
 /// 一首歌的时间尺度内基本不动，所以不会出现「整排忽高忽低」。
-/// 波形标定参数（来自 [ui] eq_reference_dbfs / eq_gain）
+/// 波形标定参数（来自 [ui] 段）
 #[derive(Debug, Clone, Copy)]
 pub struct WaveCfg {
-    /// 满高基准（dBFS）
+    /// 手动满高基准（dBFS），`autogain` 关掉时用
     pub reference_dbfs: f32,
-    /// 整体增益
+    /// 用户倍率（自动增益之上再乘一次）
     pub gain: f32,
     /// 软限幅：tanh 压缩，响的地方挤向顶部但不硬切
     pub soft_clip: bool,
+    /// 逐曲自动增益（默认开）
+    pub autogain: bool,
 }
 
 impl Default for WaveCfg {
     fn default() -> Self {
         WaveCfg {
             reference_dbfs: -6.0,
-            gain: 1.6,
-            soft_clip: false,
+            gain: 1.0,
+            soft_clip: true,
+            autogain: true,
         }
     }
 }
@@ -275,31 +314,119 @@ struct WaveAgc {
     ref_db: f32,
     gain: f32,
     soft_clip: bool,
+    /// 自动模式：用已经在解码的这条流的峰值边放边估
+    autogain: bool,
+    /// 滚动窗口里的窗峰值（dB），约 15 秒
+    peaks: Vec<f32>,
+    /// 距离上次重算的秒数
+    acc: f32,
+    /// 缓存命中时不需要再估
+    frozen: bool,
+    /// 当前估计的 p90（dB），交给界面写进缓存
+    done_p90: Arc<Mutex<Option<f32>>>,
 }
 
-/// 基准下漂速度（dB/秒）：一首歌内几乎不动
+/// 软限幅拐点：以下线性，以上 tanh
+const SOFT_KNEE: f32 = 0.75;
+/// 响度估计：攒够 1 秒才开始算（约 31 窗），攒满 15 秒冻结
+const EST_MIN_WINDOWS: usize = 31;
+const EST_WINDOWS: usize = 470;
+/// 上行快（副歌来了立刻抬，别削顶）、下行慢（不呼吸）
+const AUTO_UP_DB_PER_S: f32 = 1.5;
+const AUTO_DOWN_DB_PER_S: f32 = 0.15;
+
+/// 手动模式的基准下漂速度（dB/秒）
 const WAVE_REF_DECAY_DB_PER_S: f32 = 0.1;
-/// 基准下限（约 -22 dBFS）：再安静也不放大底噪
+/// 手动模式的基准下限（约 -22 dBFS）：再安静也不放大底噪
 const WAVE_REF_FLOOR_DB: f32 = -22.0;
-/// 基准上限：峰值不许把基准顶到满刻度以上
+/// 手动模式的基准上限
 const WAVE_REF_CAP_DB: f32 = -3.0;
 /// 冷启动基准（可被 [ui] eq_reference_dbfs 覆盖，默认 -6 dBFS）
 const WAVE_REF_INIT_DB: f32 = -6.0;
 
 impl WaveAgc {
-    fn new(cfg: WaveCfg) -> Self {
-        WaveAgc {
-            ref_db: if cfg.reference_dbfs.is_finite() {
-                cfg.reference_dbfs.clamp(-60.0, -3.0)
+    /// `p90_db`：缓存里这首歌的响度代表；None = 第一次听，边放边估
+    fn new(cfg: WaveCfg, p90_db: Option<f32>, done_p90: Arc<Mutex<Option<f32>>>) -> Self {
+        let auto_ref = p90_db.filter(|p| p.is_finite()).map(|p90| {
+            // 让 p90 落在 8/9 点：硬切 x = 8/9；分段软限幅反解 0.75+0.25*tanh(t)=8/9
+            let k = if cfg.soft_clip {
+                SOFT_KNEE
+                    + (1.0 - SOFT_KNEE)
+                        * ((AUTO_TARGET_FRAC - SOFT_KNEE) / (1.0 - SOFT_KNEE)).atanh()
             } else {
-                WAVE_REF_INIT_DB
+                AUTO_TARGET_FRAC
+            };
+            (p90 + 20.0 * (cfg.gain.clamp(0.1, 8.0) / k).log10()).clamp(-60.0, 0.0)
+        });
+        WaveAgc {
+            ref_db: match (cfg.autogain, auto_ref) {
+                (true, Some(r)) => r,
+                (true, None) => NEUTRAL_REF_DB,
+                (false, _) => {
+                    if cfg.reference_dbfs.is_finite() {
+                        cfg.reference_dbfs.clamp(-60.0, -3.0)
+                    } else {
+                        WAVE_REF_INIT_DB
+                    }
+                }
             },
             gain: cfg.gain.clamp(0.1, 8.0),
             soft_clip: cfg.soft_clip,
+            autogain: cfg.autogain,
+            peaks: Vec::with_capacity(512),
+            acc: 0.0,
+            frozen: auto_ref.is_some(),
+            done_p90,
         }
     }
 
+    /// 自动模式：用**已经在解码的这条流**的窗峰值做滚动 15 秒 p90，边放边估。
+    ///
+    /// 上行快（1.5 dB/s）、下行很慢（0.15 dB/s）：安静前奏先把基准压低没关系，
+    /// 副歌一响就快速抬上去（避免削顶）；反过来变安静时不会突然「呼吸」。
+    /// 缓存命中（第二次听同一首）就直接用，不再估。
     fn observe(&mut self, peak_db: f32, dt_s: f32) {
+        if self.autogain {
+            if self.frozen {
+                return;
+            }
+            self.peaks.push(peak_db);
+            if self.peaks.len() > EST_WINDOWS {
+                self.peaks.remove(0);
+            }
+            self.acc += dt_s;
+            if self.peaks.len() < EST_MIN_WINDOWS || self.acc < 1.0 {
+                return;
+            }
+            let elapsed = self.acc;
+            self.acc = 0.0;
+            let mut v = self.peaks.clone();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let idx = ((v.len() as f32 * 0.9) as usize).min(v.len() - 1);
+            let p90 = v[idx];
+            let k = if self.soft_clip {
+                SOFT_KNEE
+                    + (1.0 - SOFT_KNEE)
+                        * ((AUTO_TARGET_FRAC - SOFT_KNEE) / (1.0 - SOFT_KNEE)).atanh()
+            } else {
+                AUTO_TARGET_FRAC
+            };
+            let target = (p90 + 20.0 * (self.gain / k).log10()).clamp(-60.0, 0.0);
+            // 目标比当前低（歌更响）→ 下行慢；目标更高（歌更轻）→ 上行快
+            let rate = if target < self.ref_db {
+                AUTO_DOWN_DB_PER_S
+            } else {
+                AUTO_UP_DB_PER_S
+            };
+            let step = rate * elapsed;
+            self.ref_db = if self.ref_db < target {
+                (self.ref_db + step).min(target)
+            } else {
+                (self.ref_db - step).max(target)
+            };
+            *self.done_p90.lock().unwrap() = Some(p90);
+            return;
+        }
         if peak_db > self.ref_db {
             self.ref_db = peak_db.min(WAVE_REF_CAP_DB);
         } else {
@@ -307,12 +434,27 @@ impl WaveAgc {
         }
     }
 
+    /// 自动增益给这首歌加了多少 dB（相对中性基准）
+    fn auto_gain_db(&self) -> f32 {
+        self.ref_db - NEUTRAL_REF_DB
+    }
+
+    fn ref_db(&self) -> f32 {
+        self.ref_db
+    }
+
     fn amp(&self, peak: f32) -> f32 {
         // 线性映射：增益直接作用在幅度上（之前多叠一个 powf(0.9) 会把峰值压低半档）
         let x = (peak / 10f32.powf(self.ref_db / 20.0)) * self.gain;
         if self.soft_clip {
-            // tanh 软压缩：响的地方挤向顶部但不硬切成一条直线，平顶明显更少
-            (x * 1.1).tanh().min(1.0)
+            // 分段软限幅：拐点 0.75 以下保持线性（中段不被抬高，p50 才能落在 4-6/9），
+            // 超过拐点用 tanh 挤向 1.0——响处不硬切成色块，平顶接近 0
+            if x <= SOFT_KNEE {
+                x.max(0.0)
+            } else {
+                let t = ((x - SOFT_KNEE) / (1.0 - SOFT_KNEE)).tanh();
+                (SOFT_KNEE + (1.0 - SOFT_KNEE) * t).clamp(0.0, 1.0)
+            }
         } else {
             x.clamp(0.0, 1.0)
         }
@@ -327,13 +469,25 @@ pub struct PcmAnalyzer {
     /// 解码开始时刻：据此推算它「现在该播到哪」，才能区分「正常前进」和「用户拖动」
     started: std::time::Instant,
     wave: Arc<Mutex<WaveBuf>>,
+    /// 解码用的流地址（换歌要重建，不然波形还在画上一首）
+    url: String,
+    /// 当前自动增益（dB，相对中性基准），给界面显示
+    auto_gain_db: Arc<Mutex<f32>>,
+    /// 边放边估出来的 p90（收敛后才有值），界面据此写缓存
+    est_p90: Arc<Mutex<Option<f32>>>,
     /// 读线程用的结束旗标（Drop 时置位，避免线程卡在阻塞读上）
     stop: Arc<Mutex<bool>>,
 }
 
 impl PcmAnalyzer {
     /// 起解码进程。`start_secs` 用来和播放器对齐（从当前播放位置开始解）。
-    pub fn start(url: &str, start_secs: f64, wave_cfg: WaveCfg) -> Option<PcmAnalyzer> {
+    /// `p90_db`：这首歌的响度代表（App 层扫好传进来，拖动重开时传同一个值）
+    pub fn start(
+        url: &str,
+        start_secs: f64,
+        wave_cfg: WaveCfg,
+        p90_db: Option<f32>,
+    ) -> Option<PcmAnalyzer> {
         let dir = eq_dir();
         let _ = std::fs::create_dir_all(&dir);
         sweep_stale(&dir);
@@ -368,9 +522,13 @@ impl PcmAnalyzer {
             .ok()?;
 
         let wave = Arc::new(Mutex::new(WaveBuf::default()));
+        let auto_gain_db = Arc::new(Mutex::new(0.0f32));
+        let est_p90: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
         let stop = Arc::new(Mutex::new(false));
         {
             let wave = wave.clone();
+            let auto_gain_cell = auto_gain_db.clone();
+            let est_cell = est_p90.clone();
             let stop = stop.clone();
             let path = fifo.clone();
             std::thread::spawn(move || {
@@ -380,7 +538,9 @@ impl PcmAnalyzer {
                 // 已拿到 fd：立刻 unlink，靠 fd 继续读写。进程被强杀也不会留残留。
                 let _ = std::fs::remove_file(&path);
                 let mut buf = vec![0u8; WINDOW * 2];
-                let mut wagc = WaveAgc::new(wave_cfg);
+                let mut wagc = WaveAgc::new(wave_cfg, p90_db, est_cell.clone());
+                let scan_db_for_dump: Option<f32> = p90_db;
+                let gain_cell = auto_gain_cell.clone();
                 // 调试用：把每窗幅度写成 CSV（ms,amp,rms_db），默认不写
                 let mut dump = std::env::var("ZMUSIC_WAVE_DUMP").ok().and_then(|p| {
                     std::fs::OpenOptions::new()
@@ -418,14 +578,18 @@ impl PcmAnalyzer {
                     );
                     if let Some(f) = dump.as_mut() {
                         use std::io::Write;
+                        let scan = scan_db_for_dump;
                         let _ = writeln!(
                             f,
-                            "{},{:.4},{:.2}",
+                            "{},{:.4},{:.2},{:.1},{:.1}",
                             now,
                             wagc.amp(peak),
-                            20.0 * peak.max(1e-9).log10()
+                            20.0 * peak.max(1e-9).log10(),
+                            wagc.auto_gain_db(),
+                            scan.unwrap_or(-99.0)
                         );
                     }
+                    *gain_cell.lock().unwrap() = wagc.auto_gain_db();
                     {
                         let mut w = wave.lock().unwrap();
                         w.samples.push(wagc.amp(peak));
@@ -451,8 +615,31 @@ impl PcmAnalyzer {
             start: start_secs,
             started: std::time::Instant::now(),
             wave,
+            url: url.to_string(),
+            auto_gain_db,
+            est_p90,
             stop,
         })
+    }
+
+    /// 这个解码器用的流地址
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// 当前逐曲自动增益（dB，相对中性基准）：界面上给用户看「这首歌被调了多少」
+    pub fn auto_gain_db(&self) -> f32 {
+        *self.auto_gain_db.lock().unwrap()
+    }
+
+    /// 这首歌估出来的 p90（dB，收敛后才有）：界面拿去缓存，下次直接命中
+    pub fn estimated_p90(&self) -> Option<f32> {
+        *self.est_p90.lock().unwrap()
+    }
+
+    /// 当前满高基准（dBFS）：拖动重开解码器时沿用，不重新估
+    pub fn ref_db(&self) -> f32 {
+        self.auto_gain_db() + NEUTRAL_REF_DB
     }
 
     /// 最近 `max` 个波形样本 + 单调序号（界面据此只取新增的部分）
@@ -509,6 +696,85 @@ mod tests {
                 (amp * (2.0 * std::f64::consts::PI * freq * i as f64 / sr).sin() * 32767.0) as i16
             })
             .collect()
+    }
+
+    #[test]
+    fn wav_window_peaks_skips_header_and_reads_peaks() {
+        // 44 字节 RIFF/WAVE/fmt 头 + "data" 块：两窗，第二窗更响
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 16]);
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&8u32.to_le_bytes()); // 4 个 i16
+        for v in [1000i16, -2000, 16000, -32768] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let peaks = wav_window_peaks(&bytes, 2);
+        assert_eq!(peaks.len(), 2);
+        assert!((peaks[0] - 2000.0 / 32768.0).abs() < 1e-6);
+        assert!((peaks[1] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn autogain_maps_p90_to_eight_ninths() {
+        let db = |x: f32| 10f32.powf(x / 20.0);
+        // 软限幅（默认）：p90 落在 8/9 附近，更响的被压到接近但不越过 1
+        let cfg = WaveCfg {
+            autogain: true,
+            soft_clip: true,
+            gain: 1.0,
+            reference_dbfs: -6.0,
+        };
+        let cell = Arc::new(Mutex::new(None));
+        let agc = WaveAgc::new(cfg, Some(-20.0), cell.clone());
+        let amp = agc.amp(db(-20.0));
+        assert!((amp * 9.0 - 8.0).abs() < 0.2, "p90 应落在 8/9: {amp}");
+        assert!(agc.amp(1.0) <= 1.0);
+        assert!(agc.amp(db(-50.0)) < 0.15, "安静段要接近 0");
+
+        // 硬切：p90 精确落在 8/9
+        let hard = WaveAgc::new(
+            WaveCfg {
+                soft_clip: false,
+                ..cfg
+            },
+            Some(-20.0),
+            cell,
+        );
+        assert!((hard.amp(db(-20.0)) * 9.0 - 8.0).abs() < 0.05);
+        // 更响的削到 1，不会超过
+        assert_eq!(hard.amp(1.0), 1.0);
+    }
+
+    #[test]
+    fn incremental_estimate_rises_fast_and_falls_slow() {
+        let cfg = WaveCfg {
+            autogain: true,
+            soft_clip: true,
+            gain: 1.0,
+            reference_dbfs: -6.0,
+        };
+        let cell = Arc::new(Mutex::new(None));
+        let mut agc = WaveAgc::new(cfg, None, cell.clone());
+        assert!((agc.ref_db - NEUTRAL_REF_DB).abs() < 0.01, "第一次听先用中性基准");
+
+        // 安静段：基准慢慢往下让（慢）
+        let start = agc.ref_db;
+        for _ in 0..470 {
+            agc.observe(-30.0, 0.032);
+        }
+        let low = agc.ref_db;
+        assert!(low < start, "安静段基准应该下移: {start} -> {low}");
+
+        // 副歌来了：基准快速上抬，比下移快得多
+        for _ in 0..470 {
+            agc.observe(-3.0, 0.032);
+        }
+        assert!(agc.ref_db > low + 5.0, "响段要快速抬上去: {low} -> {}", agc.ref_db);
+        assert!(cell.lock().unwrap().is_some(), "要回传估出来的 p90");
     }
 
     #[test]
