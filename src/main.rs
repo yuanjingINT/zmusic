@@ -5,6 +5,8 @@ mod models;
 mod player;
 mod proxy;
 mod settings;
+mod i18n;
+mod onboarding;
 mod settings_ui;
 mod source;
 mod superdl;
@@ -42,6 +44,14 @@ fn main() -> anyhow::Result<()> {
         None => {}
     }
 
+    // 首次运行：先走向导（语言/主题/波形/下载目录/音质），只在第一次出现。
+    // 判据是配置里的 first_run_done，不是「配置文���存在与否」——升级不会再弹。
+    {
+        let probe = config::Config::load();
+        if !probe.first_run_done {
+            onboarding::run(&probe)?;
+        }
+    }
     // mpv 先起：socket 就绪要 ~120ms，这段和下面的配置/注册表初始化并行，
     // 首帧只等剩下的那点时间（旧实现先初始化、再同步等 mpv，白等一整个量化周期）。
     let starting = player::Player::spawn()?;
@@ -90,6 +100,7 @@ fn print_help() {
          \x20 zmusic            启动播放器\n\
          \x20 zmusic config     打开设置界面（外观/波形/下载目录）\n\
          \x20 zmusic config --edit   直接用 $EDITOR 编辑 config.toml\n\
+         \x20 zmusic config --wizard 重新走一遍首次设置向导\n\
          \x20 zmusic config --print  只打印配置文件路径\n\
          \x20 zmusic --help / -V\n\
          \n\
@@ -105,6 +116,9 @@ fn config_cli(rest: &[String]) -> anyhow::Result<()> {
     if rest.iter().any(|a| a == "--print") {
         println!("{}", path.display());
         return Ok(());
+    }
+    if rest.iter().any(|a| a == "--wizard") {
+        return onboarding::run(&cfg);
     }
     if !rest.iter().any(|a| a == "--edit") {
         return settings_ui::run(&cfg);

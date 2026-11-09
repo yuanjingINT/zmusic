@@ -73,6 +73,12 @@ struct General {
     quality: Option<String>,
     #[serde(default)]
     download_dir: Option<String>,
+    /// 界面语言（zh / en）；首次导向写在这里
+    #[serde(default)]
+    language: Option<String>,
+    /// 首次设置是否已走过
+    #[serde(default)]
+    first_run_done: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -224,6 +230,10 @@ struct FileConfig {
     #[serde(default)]
     jamendo: Jamendo,
     #[serde(default)]
+    first_run_done: Option<bool>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
     ui: Ui,
     #[serde(default)]
     superdl: Option<SuperDlSection>,
@@ -236,6 +246,8 @@ pub struct SuperDlSection {
 }
 
 pub struct Config {
+    /// 首次设置向导是否已经走过（升级时不该再弹）
+    pub first_run_done: bool,
     pub download_dir: PathBuf,
     pub quality: String,
     pub api_base: String,
@@ -357,7 +369,26 @@ impl Config {
                 }
             }
         }
+        // 界面语言：配置值优先，其次环境变量，默认中文
+        let mut lang = parsed
+            .general
+            .language
+            .clone()
+            .or_else(|| parsed.language.clone())
+            .or_else(|| std::env::var("ZMUSIC_LANG").ok())
+            .unwrap_or_else(|| "zh".to_string());
+        lang.make_ascii_lowercase();
+        crate::i18n::set_lang(if lang.starts_with("en") {
+            crate::i18n::Lang::En
+        } else {
+            crate::i18n::Lang::Zh
+        });
         Config {
+            first_run_done: parsed
+                .general
+                .first_run_done
+                .or(parsed.first_run_done)
+                .unwrap_or(false),
             download_dir,
             quality: pick("NCM_QUALITY", parsed.general.quality, "exhigh"),
             api_base: pick("NCM_API", parsed.netease.api_base, "http://127.0.0.1:3000"),

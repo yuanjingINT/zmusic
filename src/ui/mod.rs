@@ -52,16 +52,18 @@ pub fn detail_unsupported_msg(source_id: &str, what: &str) -> String {
     }
 }
 
-/// 主菜单；编号从 0 开始（数字键 0–6 直达）。配置统一进 `config.toml`，不再有设置页入口。
-pub const MENU_ITEMS: [&str; 7] = [
-    "搜索音乐",
-    "歌曲推荐",
-    "专辑推荐",
-    "歌单推荐",
-    "我的下载",
-    "我的收藏",
-    "超级下载",
-];
+/// 主菜单；编号从 0 开始（数字键 0–6 直达）。文案随界面语言变化。
+pub fn menu_items() -> [&'static str; 7] {
+    [
+        crate::i18n::t("menu.search"),
+        crate::i18n::t("menu.songs"),
+        crate::i18n::t("menu.albums"),
+        crate::i18n::t("menu.playlists"),
+        crate::i18n::t("menu.downloads"),
+        crate::i18n::t("menu.favorites"),
+        crate::i18n::t("menu.superdl"),
+    ]
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScreenKind {
@@ -81,17 +83,17 @@ pub enum ScreenKind {
 impl ScreenKind {
     fn name(&self) -> &'static str {
         match self {
-            ScreenKind::Menu => "主菜单",
-            ScreenKind::Search => "搜索音乐",
-            ScreenKind::Songs => "歌曲推荐",
-            ScreenKind::Albums => "专辑推荐",
-            ScreenKind::Playlists => "歌单推荐",
-            ScreenKind::Library => "曲目列表",
-            ScreenKind::NowPlaying => "正在播放",
-            ScreenKind::Downloads => "我的下载",
-            ScreenKind::Favorites => "我的收藏",
-            ScreenKind::SuperDl => "超级下载",
-            ScreenKind::Settings => "设置",
+            ScreenKind::Menu => crate::i18n::t("menu.title"),
+            ScreenKind::Search => crate::i18n::t("title.search"),
+            ScreenKind::Songs => crate::i18n::t("title.songs"),
+            ScreenKind::Albums => crate::i18n::t("title.albums"),
+            ScreenKind::Playlists => crate::i18n::t("title.playlists"),
+            ScreenKind::Library => crate::i18n::t("title.library"),
+            ScreenKind::NowPlaying => crate::i18n::t("title.nowplaying"),
+            ScreenKind::Downloads => crate::i18n::t("title.downloads"),
+            ScreenKind::Favorites => crate::i18n::t("title.favorites"),
+            ScreenKind::SuperDl => crate::i18n::t("title.superdl"),
+            ScreenKind::Settings => crate::i18n::t("title.settings"),
         }
     }
 }
@@ -1366,7 +1368,7 @@ impl App {
 
     fn list_len(&self) -> usize {
         match self.screen {
-            ScreenKind::Menu => MENU_ITEMS.len(),
+            ScreenKind::Menu => menu_items().len(),
             ScreenKind::Playlists => self.playlists.len(),
             ScreenKind::Songs => self.songs.len(),
             ScreenKind::Albums => self.albums.len(),

@@ -297,7 +297,7 @@ fn draw(f: &mut ratatui::Frame, st: &State) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Span::styled(
-            " zmusic 设置 ",
+            format!(" {} ", crate::i18n::t("set.title")),
             Style::default()
                 .fg(Color::Rgb(208, 188, 255))
                 .add_modifier(Modifier::BOLD),
@@ -311,15 +311,15 @@ fn draw(f: &mut ratatui::Frame, st: &State) {
     let labels: Vec<&str> = ROWS
         .iter()
         .map(|r| match r {
-            Row::Theme => "外观 · 主题",
-            Row::Wave => "外观 · 波形",
-            Row::WaveSpacing => "外观 · 波形间距",
-            Row::WavePad => "外观 · 波形上下留白",
-            Row::Animations => "外观 · 总动画",
-            Row::Spinner => "外观 · 加载转圈",
-            Row::DownloadDir => "下载 · 目录",
-            Row::SuperDlDir => "超级下载 · 目标目录",
-            Row::Quality => "音质",
+            Row::Theme => crate::i18n::t("set.theme"),
+            Row::Wave => crate::i18n::t("set.wave"),
+            Row::WaveSpacing => crate::i18n::t("set.spacing"),
+            Row::WavePad => crate::i18n::t("set.pad"),
+            Row::Animations => crate::i18n::t("set.anim"),
+            Row::Spinner => crate::i18n::t("set.spinner"),
+            Row::DownloadDir => crate::i18n::t("set.download"),
+            Row::SuperDlDir => crate::i18n::t("set.superdl"),
+            Row::Quality => crate::i18n::t("set.quality"),
         })
         .collect();
     let label_w = labels
@@ -382,7 +382,7 @@ fn draw(f: &mut ratatui::Frame, st: &State) {
     };
     let help = vec![
         Line::from(Span::styled(
-            " j/k ↑↓ 选择   h/l ←→ 切换   Enter 编辑/切换   s 保存   q 保存并退出",
+            crate::i18n::t("set.help"),
             Style::default().fg(Color::Rgb(147, 143, 153)),
         )),
         Line::from(Span::styled(

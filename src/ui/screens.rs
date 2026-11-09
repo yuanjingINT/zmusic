@@ -369,7 +369,7 @@ fn window(sel: usize, len: usize, h: usize) -> (usize, usize) {
 }
 
 fn render_menu(f: &mut Frame, area: Rect, app: &mut App) {
-    let items: Vec<ListItem> = crate::ui::MENU_ITEMS
+    let items: Vec<ListItem> = crate::ui::menu_items()
         .iter()
         .enumerate()
         .map(|(i, name)| {
@@ -386,7 +386,10 @@ fn render_menu(f: &mut Frame, area: Rect, app: &mut App) {
         .block(
             Block::bordered()
                 .border_type(BorderType::Rounded)
-                .title(Span::styled(" 功能模块 ", theme::title())),
+                .title(Span::styled(
+                    format!(" {} ", crate::i18n::t("menu.title")),
+                    theme::title(),
+                )),
         );
     f.render_stateful_widget(list, area, &mut state);
 }
