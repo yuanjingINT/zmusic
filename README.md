@@ -323,10 +323,11 @@ cookie 从浏览器开发者工具里复制（目标站点已登录状态下，�
 | `[ui] equalizer_fps` | `30` | 5–60，播放页的重绘帧率 |
 | `[ui] equalizer_source` | `pcm` | `pcm` 真频谱；`synth` 不拉流的慢呼吸示意波形（省流量用） |
 | `[ui] eq_reference_dbfs` | `-6` | 波形满高对应的 dBFS，越小越容易顶满 |
-| `[ui] eq_gain` | `2.2` | 波形增益；1.0 = 不放大，调大波形更高（太大副歌会平顶） |
+| `[ui] eq_gain` | `1.6` | 波形增益；1.0 = 不放大，调大波形更高（太大副歌会平顶） |
+| `[ui] eq_soft_clip` | `false` | 软限幅（tanh）：响的地方挤向顶部但不硬切，平顶更少 |
 
 波形以中线上下对称、实心填充（braille 点阵，一个字符格 2×4 个点）；幅度不足 1 个点的列整列留白，所以静音段是一片空白、不画中线。
-`ZMUSIC_EQ_REF_DBFS` / `ZMUSIC_EQ_GAIN` 可临时覆盖。
+`ZMUSIC_EQ_REF_DBFS` / `ZMUSIC_EQ_GAIN` / `ZMUSIC_EQ_SOFT_CLIP` / `ZMUSIC_EQ_FPS` 可临时覆盖（见 docs/CONFIG.md 第 5 节的真值和量法）。
 
 #### 超级下载
 

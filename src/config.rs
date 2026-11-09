@@ -53,8 +53,10 @@ equalizer_source = "pcm"
 eq_agc = true
 # 波形满高对应的 dBFS（越小越容易顶满；默认 -6）
 eq_reference_dbfs = -6.0
-# 波形增益（1.0 = 不放大；默认 2.2：副歌中位能到 8/9，再高就大面积平顶了）
-eq_gain = 2.2
+# 波形增益（1.0 = 不放大；默认 1.6。调大波形更高，但副歌会平顶）
+eq_gain = 1.6
+# 软限幅（tanh）：响的地方挤向顶部但不硬切，平顶更少；默认关
+eq_soft_clip = false
 
 [jamendo]
 # Jamendo 免费申请的 client_id（https://devportal.jamendo.com/）
@@ -91,6 +93,8 @@ struct Ui {
     eq_reference_dbfs: Option<f32>,
     #[serde(default)]
     eq_gain: Option<f32>,
+    #[serde(default)]
+    eq_soft_clip: Option<bool>,
 }
 
 /// 均衡器数据来源
@@ -119,8 +123,10 @@ pub struct Animations {
     pub eq_agc: bool,
     /// 波形满高对应的 dBFS（默认 -6）
     pub eq_reference_dbfs: f32,
-    /// 波形增益（默认 1.4）
+    /// 波形增益（默认 1.6）
     pub eq_gain: f32,
+    /// 软限幅（tanh），默认关：开了平顶少、但峰值不会真的贴边
+    pub eq_soft_clip: bool,
 }
 
 impl Default for Animations {
@@ -135,7 +141,8 @@ impl Default for Animations {
             equalizer_source: EqSource::Pcm,
             eq_agc: true,
             eq_reference_dbfs: -6.0,
-            eq_gain: 2.2,
+            eq_gain: 1.6,
+            eq_soft_clip: false,
         }
     }
 }
@@ -334,7 +341,8 @@ impl Config {
                     parsed.ui.eq_reference_dbfs,
                     -6.0,
                 ),
-                eq_gain: pick_f32(env, "ZMUSIC_EQ_GAIN", parsed.ui.eq_gain, 2.2),
+                eq_gain: pick_f32(env, "ZMUSIC_EQ_GAIN", parsed.ui.eq_gain, 1.6),
+                eq_soft_clip: pick_bool(env, "ZMUSIC_EQ_SOFT_CLIP", parsed.ui.eq_soft_clip, false),
                 equalizer_source: match pick("ZMUSIC_EQ_SOURCE", parsed.ui.equalizer_source, "pcm")
                     .as_str()
                 {

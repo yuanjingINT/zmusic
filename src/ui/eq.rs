@@ -257,13 +257,16 @@ pub struct WaveCfg {
     pub reference_dbfs: f32,
     /// 整体增益
     pub gain: f32,
+    /// 软限幅：tanh 压缩，响的地方挤向顶部但不硬切
+    pub soft_clip: bool,
 }
 
 impl Default for WaveCfg {
     fn default() -> Self {
         WaveCfg {
             reference_dbfs: -6.0,
-            gain: 2.2,
+            gain: 1.6,
+            soft_clip: false,
         }
     }
 }
@@ -271,6 +274,7 @@ impl Default for WaveCfg {
 struct WaveAgc {
     ref_db: f32,
     gain: f32,
+    soft_clip: bool,
 }
 
 /// 基准下漂速度（dB/秒）：一首歌内几乎不动
@@ -291,6 +295,7 @@ impl WaveAgc {
                 WAVE_REF_INIT_DB
             },
             gain: cfg.gain.clamp(0.1, 8.0),
+            soft_clip: cfg.soft_clip,
         }
     }
 
@@ -304,7 +309,13 @@ impl WaveAgc {
 
     fn amp(&self, peak: f32) -> f32 {
         // 线性映射：增益直接作用在幅度上（之前多叠一个 powf(0.9) 会把峰值压低半档）
-        ((peak / 10f32.powf(self.ref_db / 20.0)) * self.gain).clamp(0.0, 1.0)
+        let x = (peak / 10f32.powf(self.ref_db / 20.0)) * self.gain;
+        if self.soft_clip {
+            // tanh 软压缩：响的地方挤向顶部但不硬切成一条直线，平顶明显更少
+            (x * 1.1).tanh().min(1.0)
+        } else {
+            x.clamp(0.0, 1.0)
+        }
     }
 }
 

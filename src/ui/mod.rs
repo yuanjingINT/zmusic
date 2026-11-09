@@ -756,6 +756,7 @@ impl App {
         let wave_cfg = crate::ui::eq::WaveCfg {
             reference_dbfs: self.anim.eq_reference_dbfs,
             gain: self.anim.eq_gain,
+            soft_clip: self.anim.eq_soft_clip,
         };
         match crate::ui::eq::PcmAnalyzer::start(&url, st.time_pos.unwrap_or(0.0), wave_cfg) {
             Some(a) => self.eq_analyzer = Some(a),
