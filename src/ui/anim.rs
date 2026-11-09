@@ -18,24 +18,30 @@ pub fn spinner(on: bool, loading: bool, elapsed_ms: u64) -> Option<&'static str>
     Some(SPINNER[((elapsed_ms / SPINNER_FRAME_MS) as usize) % SPINNER.len()])
 }
 
-/// 均衡器：`bars` 根柱子，**1 秒只变一次**（用播放进度秒数驱动，不另起高频计时器）。
-/// 同一秒内是确定性的（同一秒重绘多次结果一样，不会闪）。
-pub fn eq_bars(on: bool, playing: bool, secs: u64, bars: usize) -> Vec<&'static str> {
+/// 均衡器：`bars` 根柱子，**单调时钟驱动**，15fps 下相邻帧高度只差 1–2 档，看起来像在呼吸。
+///
+/// 波形不是随机数：每根柱子是两条正弦叠加（频率比 1 : 1.7，相位错开），
+/// 再量化到 8 档。同一时刻结果确定，重绘不会抖。
+pub fn eq_bars(on: bool, playing: bool, t_secs: f64, bars: usize) -> Vec<&'static str> {
     if !on || !playing || bars == 0 {
         return Vec::new();
     }
+    use std::f64::consts::TAU;
     let mut out = Vec::with_capacity(bars);
     for i in 0..bars {
-        // 线性同余 + 位移混合：确定性、相邻秒之间跳得足够明显
-        let mut x = secs
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add((i as u64 + 1).wrapping_mul(1442695040888963407));
-        x ^= x >> 33;
-        x = x.wrapping_mul(0xff51afd7ed558ccd);
-        x ^= x >> 33;
-        out.push(EQ_LEVELS[(x % EQ_LEVELS.len() as u64) as usize]);
+        let phase = i as f64 * 0.9;
+        let a = (t_secs * TAU * 0.8 + phase).sin();
+        let b = (t_secs * TAU * 1.37 + phase * 1.7).sin() * 0.5;
+        let v = (a + b) / 1.5; // -1..1
+        let level = (((v + 1.0) / 2.0) * 7.0).round().clamp(0.0, 7.0) as usize;
+        out.push(EQ_LEVELS[level]);
     }
     out
+}
+
+/// 某个动效帧率对应的重绘间隔（毫秒），夹在 5–30fps
+pub fn interval_ms(fps: u8) -> u64 {
+    1000 / fps.clamp(5, 30) as u64
 }
 
 /// 切歌/切页淡入：3 档明暗，每档 90ms，一次性结束（不循环）。
@@ -97,26 +103,59 @@ mod tests {
 
     #[test]
     fn equalizer_is_empty_when_disabled_or_paused() {
-        assert!(eq_bars(false, true, 7, 5).is_empty());
-        assert!(eq_bars(true, false, 7, 5).is_empty());
+        assert!(eq_bars(false, true, 7.0, 5).is_empty());
+        assert!(eq_bars(true, false, 7.0, 5).is_empty());
     }
 
     #[test]
-    fn equalizer_is_deterministic_within_a_second() {
-        let a = eq_bars(true, true, 42, 5);
-        let b = eq_bars(true, true, 42, 5);
-        assert_eq!(a, b, "同一秒内必须一样，否则会闪");
+    fn equalizer_is_deterministic_for_the_same_instant() {
+        let a = eq_bars(true, true, 42.25, 5);
+        let b = eq_bars(true, true, 42.25, 5);
+        assert_eq!(a, b, "同一时刻必须一样，否则重绘会抖");
         assert_eq!(a.len(), 5);
         assert!(a.iter().all(|c| EQ_LEVELS.contains(c)));
     }
 
+    /// 15fps 下相邻帧每根柱子最多差 2 档：这是「流畅」的量化标准，
+    /// 不是三档乱跳（旧实现 1fps + 伪随机就是这么跳的）。
     #[test]
-    fn equalizer_changes_between_seconds() {
-        let secs: Vec<Vec<&str>> = (0..6).map(|s| eq_bars(true, true, s, 5)).collect();
+    fn equalizer_moves_smoothly_at_15fps() {
+        let fps = 15.0;
+        let mut prev = eq_bars(true, true, 0.0, 5);
+        let mut max_jump = 0i32;
+        for step in 1..=90 {
+            let t = step as f64 / fps;
+            let cur = eq_bars(true, true, t, 5);
+            assert_eq!(cur.len(), 5);
+            for (x, y) in prev.iter().zip(cur.iter()) {
+                let lx = EQ_LEVELS.iter().position(|c| c == x).unwrap() as i32;
+                let ly = EQ_LEVELS.iter().position(|c| c == y).unwrap() as i32;
+                max_jump = max_jump.max((lx - ly).abs());
+            }
+            prev = cur;
+        }
+        assert!(max_jump <= 2, "相邻帧最多差 2 档，实际 {max_jump}");
+    }
+
+    /// 连续 5 秒里柱子必须真的在动（不能是常量）
+    #[test]
+    fn equalizer_actually_moves_over_time() {
+        let frames: Vec<Vec<&str>> = (0..75)
+            .map(|i| eq_bars(true, true, i as f64 / 15.0, 5))
+            .collect();
         assert!(
-            secs.windows(2).any(|w| w[0] != w[1]),
-            "不同秒至少要有变化，否则看起来是静止的"
+            frames.windows(2).filter(|w| w[0] != w[1]).count() > 50,
+            "大多数相邻帧都应该有变化"
         );
+    }
+
+    #[test]
+    fn interval_is_clamped_between_5_and_30_fps() {
+        assert_eq!(interval_ms(15), 66);
+        assert_eq!(interval_ms(5), 200);
+        assert_eq!(interval_ms(30), 33);
+        assert_eq!(interval_ms(1), 200, "低于 5fps 按 5fps 算");
+        assert_eq!(interval_ms(60), 33, "高于 30fps 按 30fps 算");
     }
 
     #[test]

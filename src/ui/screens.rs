@@ -1103,10 +1103,10 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         Paragraph::new(Line::from(Span::styled(title, title_style)).alignment(Alignment::Center)),
         ti,
     );
-    // 播放中均衡器：靠 time-pos 的秒数驱动，1 秒才变一次，不另起计时器
-    let playing = !st.idle && st.time_pos.is_some();
-    let secs = st.time_pos.unwrap_or(0.0).max(0.0) as u64;
-    let bars = crate::ui::anim::eq_bars(app.anim.equalizer_on(), playing, secs, 5);
+    // 播放中均衡器：单调时钟驱动、15fps 平滑波形（time-pos 只管进度条文字，不驱动动画）
+    let playing = !st.idle && !st.paused && st.time_pos.is_some();
+    let t_secs = app.started.elapsed().as_secs_f64();
+    let bars = crate::ui::anim::eq_bars(app.anim.equalizer_on(), playing, t_secs, 5);
     if bars.is_empty() {
         f.render_widget(
             Paragraph::new(

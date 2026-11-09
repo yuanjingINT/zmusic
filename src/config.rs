@@ -45,6 +45,8 @@ spinner = true
 equalizer = true
 smooth_progress = true
 fade = true
+# 均衡器帧率（5-30，默认 15，和播放时的事件循环节奏对齐）
+equalizer_fps = 15
 
 [jamendo]
 # Jamendo 免费申请的 client_id（https://devportal.jamendo.com/）
@@ -71,6 +73,8 @@ struct Ui {
     smooth_progress: Option<bool>,
     #[serde(default)]
     fade: Option<bool>,
+    #[serde(default)]
+    equalizer_fps: Option<u8>,
 }
 
 /// 动效开关：总开关 + 每个动效单独开关，全部默认开。
@@ -82,6 +86,8 @@ pub struct Animations {
     pub equalizer: bool,
     pub smooth_progress: bool,
     pub fade: bool,
+    /// 均衡器帧率，5–30，默认 15
+    pub equalizer_fps: u8,
 }
 
 impl Default for Animations {
@@ -92,6 +98,7 @@ impl Default for Animations {
             equalizer: true,
             smooth_progress: true,
             fade: true,
+            equalizer_fps: 15,
         }
     }
 }
@@ -230,6 +237,16 @@ impl Config {
                 _ => file_val.unwrap_or(default),
             }
         };
+        let pick_u8 = |env: &dyn Fn(&str) -> Option<String>,
+                       env_key: &str,
+                       file_val: Option<u8>,
+                       default: u8|
+         -> u8 {
+            env(env_key)
+                .and_then(|v| v.trim().parse::<u8>().ok())
+                .or(file_val)
+                .unwrap_or(default)
+        };
         let pick_opt = |env_key: &str, file_val: Option<String>| -> Option<String> {
             env(env_key)
                 .and_then(non_empty)
@@ -262,6 +279,7 @@ impl Config {
                 equalizer: parsed.ui.equalizer.unwrap_or(true),
                 smooth_progress: parsed.ui.smooth_progress.unwrap_or(true),
                 fade: parsed.ui.fade.unwrap_or(true),
+                equalizer_fps: pick_u8(env, "ZMUSIC_EQ_FPS", parsed.ui.equalizer_fps, 15),
             },
         }
     }

@@ -437,12 +437,15 @@ impl App {
             }
             // 有任务在飞（搜索/加载/取歌单）时 16ms 一拍，异步结果最多等 16ms 就上屏；
             // 空闲或纯播放时回到 60ms 一拍，别为了这点延迟让空闲 CPU 翻三倍。
-            let anim_on = self.anim.smooth_progress_on() || self.anim.equalizer_on();
-            let playing = self.now_playing.is_some() && !self.player.state().idle;
+            // 「真在播放」= 有歌、mpv 没空闲、也没暂停；暂停后动画立刻停。
+            let st = self.player.state();
+            let playing = self.now_playing.is_some() && !st.idle && !st.paused;
+            // 只有「正在播放页 + 真在播放 + 均衡器开着」才按均衡器帧率重绘；
+            // 切页/暂停立刻回到空闲节奏（60ms），不因为均衡器让全程序按 15fps 跑。
             let tick_ms = if self.is_loading() {
                 16
-            } else if playing && anim_on {
-                66 // 15fps：进度/均衡器够用，也不拿 16ms 跑全屏重绘
+            } else if self.screen == ScreenKind::NowPlaying && playing && self.anim.equalizer_on() {
+                crate::ui::anim::interval_ms(self.anim.equalizer_fps)
             } else {
                 60
             };
