@@ -1,7 +1,7 @@
 # Maintainer: yuanjing <yuanjing@yuanjing.art>
 pkgname=zmusic
 pkgver=0.1.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Terminal NetEase Cloud Music player (Rust / ratatui TUI)"
 arch=('x86_64' 'aarch64')
 url="https://git.tuxai.org/personal/zmusic"

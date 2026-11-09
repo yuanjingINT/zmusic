@@ -178,8 +178,14 @@ fn finish(cfg: &Config, st: &State) -> anyhow::Result<()> {
         u.insert("theme".into(), toml::Value::String(THEMES[st.theme].into()));
         u.insert("equalizer".into(), toml::Value::Boolean(st.wave));
     }
+    // 下载目录先建好（用户可能填了一个还不存在的路径）
     if let Some(dir) = std::path::Path::new(&st.dir).parent() {
         let _ = std::fs::create_dir_all(dir);
+    }
+    // 配置文件自己的父目录也要建：全新安装时 ~/.config/zmusic 根本不存在，
+    // 之前漏了这一句，导致首次向导一结束就 `No such file or directory` 退出。
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, toml::to_string_pretty(&doc)?)?;
     Ok(())
