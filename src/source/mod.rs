@@ -154,16 +154,21 @@ pub fn by_source_priority(a: &str, b: &str) -> std::cmp::Ordering {
 
 /// 内部源 id → 给人看的名字。列表/正在播放/i 弹窗都走它，未知 id 原样返回。
 pub fn source_display(id: &str) -> String {
+    source_display_lang(id, !crate::i18n::en())
+}
+
+/// 同 [`source_display`]，但语言由参数给（测试要一次性验中英两版）
+pub fn source_display_lang(id: &str, zh: bool) -> String {
     match id {
-        "netease" => "网易云".to_string(),
-        "qq" => "QQ(直连)".to_string(),
-        "meting:tencent" => "QQ(Meting)".to_string(),
-        "meting:kugou" => "酷狗".to_string(),
-        "meting:baidu" => "千度".to_string(),
-        "meting:kuwo" => "酷我".to_string(),
+        "netease" => if zh { "网易云" } else { "NetEase" }.to_string(),
+        "qq" => if zh { "QQ(直连)" } else { "QQ (direct)" }.to_string(),
+        "meting:tencent" => if zh { "QQ(Meting)" } else { "QQ (Meting)" }.to_string(),
+        "meting:kugou" => if zh { "酷狗" } else { "Kugou" }.to_string(),
+        "meting:baidu" => if zh { "千度" } else { "Baidu" }.to_string(),
+        "meting:kuwo" => if zh { "酷我" } else { "Kuwo" }.to_string(),
         "youtube" => "YouTube".to_string(),
         "soundcloud" => "SoundCloud".to_string(),
-        "migu" => "咪咕".to_string(),
+        "migu" => if zh { "咪咕" } else { "Migu" }.to_string(),
         "audius" => "Audius".to_string(),
         "ccmixter" => "ccMixter".to_string(),
         "wikimedia" => "Wikimedia".to_string(),
@@ -467,6 +472,31 @@ mod tests {
         }
         assert_eq!(source_display("some-new-source"), "some-new-source");
         assert_eq!(source_display(""), "");
+
+        // 英文版不许出现汉字，且每个源都得有名字
+        for id in [
+            "netease",
+            "qq",
+            "meting:tencent",
+            "meting:kugou",
+            "meting:baidu",
+            "meting:kuwo",
+            "youtube",
+            "soundcloud",
+            "migu",
+            "audius",
+            "ccmixter",
+            "wikimedia",
+            "jamendo",
+            "opengameart",
+        ] {
+            let en = source_display_lang(id, false);
+            assert!(!en.is_empty(), "{id} 英文名为空");
+            assert!(
+                !en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "{id} 英文名混了中文: {en}"
+            );
+        }
     }
 
     #[test]

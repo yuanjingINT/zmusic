@@ -61,10 +61,17 @@ struct State {
     status: Option<(String, bool)>,
 }
 
-const THEMES: [(&str, &str); 2] = [
-    ("MD3 暗色（自动降级 truecolor/256/单色）", "md3"),
-    ("单色（只用明暗/反显）", "mono"),
-];
+const THEMES: [&str; 2] = ["md3", "mono"];
+
+/// 主题名按界面语言显示（值本身仍是 md3 / mono）
+fn theme_label(i: usize) -> &'static str {
+    match (i, crate::i18n::en()) {
+        (0, false) => "MD3 暗色（自动降级 truecolor/256/单色）",
+        (0, true) => "MD3 dark (auto-degrades to truecolor/256/mono)",
+        (_, false) => "单色（只用明暗/反显）",
+        (_, true) => "Mono (brightness and reverse video only)",
+    }
+}
 const QUALITIES: [&str; 5] = ["standard", "higher", "exhigh", "lossless", "hires"];
 
 impl State {
@@ -96,16 +103,23 @@ impl State {
 
     fn value(&self, row: Row) -> String {
         match row {
-            Row::Theme => THEMES[self.theme].0.to_string(),
+            Row::Theme => theme_label(self.theme).to_string(),
             Row::Wave => yes_no(self.wave),
-            Row::WaveSpacing => format!("{}（1 密 / 2 默认 / 3 疏）", self.spacing),
-            Row::WavePad => format!("{} 行", self.pad),
+            Row::WaveSpacing => crate::tr!(
+                "{}（1 密 / 2 默认 / 3 疏）",
+                "{} (1 dense / 2 default / 3 airy)",
+                self.spacing
+            ),
+            Row::WavePad => crate::tr!("{} 行", "{} rows", self.pad),
             Row::Animations => yes_no(self.animations),
             Row::Spinner => yes_no(self.spinner),
             Row::DownloadDir => self.download_dir.clone(),
             Row::SuperDlDir => {
                 if self.superdl_dir.is_empty() {
-                    "（未设置：超级下载只认可移动设备）".to_string()
+                    crate::tr!(
+                        "（未设置：超级下载只认可移动设备）",
+                        "(unset: super download only accepts removable drives)"
+                    )
                 } else {
                     self.superdl_dir.clone()
                 }
@@ -184,7 +198,7 @@ impl State {
                     "wave_spacing".into(),
                     toml::Value::Integer(self.spacing as i64),
                 );
-                t.insert("theme".into(), toml::Value::String(THEMES[self.theme].1.into()));
+                t.insert("theme".into(), toml::Value::String(THEMES[self.theme].into()));
             }
         }
         if !self.superdl_dir.trim().is_empty() {
@@ -206,13 +220,20 @@ impl State {
         }
         std::fs::write(path, toml::to_string_pretty(&doc)?)?;
         self.dirty = false;
-        self.status = Some((format!("已写入 {}", path.display()), true));
+        self.status = Some((
+            crate::tr!("已写入 {}", "Written to {}", path.display()),
+            true,
+        ));
         Ok(())
     }
 }
 
 fn yes_no(v: bool) -> String {
-    if v { "开".into() } else { "关".into() }
+    if v {
+        crate::tr!("开", "on")
+    } else {
+        crate::tr!("关", "off")
+    }
 }
 
 fn wrap(cur: usize, len: usize, dir: i32) -> usize {

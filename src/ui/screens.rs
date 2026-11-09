@@ -41,14 +41,14 @@ pub fn render_all(f: &mut Frame, app: &mut App) {
 fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Span::styled(" 设置 ", theme::title()));
+        .title(Span::styled(crate::tr!(" 设置 ", " Settings "), theme::title()));
     let inner = block.inner(area);
     let usb = app.settings.is_usb();
     let mut items: Vec<ListItem> = Vec::new();
     let loc_line = Line::from(vec![
-        Span::styled("下载位置:  ", theme::song_title()),
+        Span::styled(crate::tr!("下载位置:  ", "Download to:  "), theme::song_title()),
         Span::styled(
-            "[ 本地电脑 ]",
+            crate::tr!("[ 本地电脑 ]", "[ This computer ]"),
             if !usb {
                 theme::primary().add_modifier(ratatui::style::Modifier::BOLD)
             } else {
@@ -57,7 +57,7 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
         ),
         Span::styled("   /   ", theme::dim()),
         Span::styled(
-            "[ U盘 ]",
+            crate::tr!("[ U盘 ]", "[ USB drive ]"),
             if usb {
                 theme::primary().add_modifier(ratatui::style::Modifier::BOLD)
             } else {
@@ -65,8 +65,9 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
             },
         ),
         Span::styled(
-            format!(
+            crate::tr!(
                 "     当前: {}",
+                "     current: {}",
                 if usb {
                     app.settings.usb_mount.clone()
                 } else {
@@ -78,17 +79,20 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
     ]);
     items.push(ListItem::new(loc_line));
     items.push(ListItem::new(Line::from(vec![
-        Span::styled("配色:      ", theme::song_title()),
+        Span::styled(crate::tr!("配色:      ", "Palette:   "), theme::song_title()),
         Span::styled(theme::palette_name(), theme::dim()),
     ])));
     if app.settings_usb_loading && app.settings_usb.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
-            "  (正在检测 U盘...)",
+            crate::tr!("  (正在检测 U盘...)", "  (detecting USB drives...)"),
             theme::dim(),
         ))));
     } else if app.settings_usb.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
-            "  (未检测到 U盘, 插入后重新进入本界面)",
+            crate::tr!(
+                "  (未检测到 U盘, 插入后重新进入本界面)",
+                "  (no USB drive detected, plug one in and reopen this screen)"
+            ),
             theme::dim(),
         ))));
     } else {
@@ -106,7 +110,9 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
                         "   {}  {}  {}",
                         d.size_gb(),
                         d.model,
-                        d.mount.as_deref().unwrap_or("未挂载")
+                        d.mount.as_deref().unwrap_or_else(|| {
+                            if crate::i18n::en() { "not mounted" } else { "未挂载" }
+                        })
                     ),
                     theme::dim(),
                 ),
@@ -115,7 +121,10 @@ fn render_settings(f: &mut Frame, area: Rect, app: &mut App) {
         }
     }
     let hint = Line::from(Span::styled(
-        " 操作: ↑↓选择  行1(下载位置)按Enter/←→切换本地或U盘  选中U盘按Enter下载到该设备",
+        crate::tr!(
+            " 操作: ↑↓选择  行1(下载位置)按Enter/←→切换本地或U盘  选中U盘按Enter下载到该设备",
+            " Keys: ↑↓ move  row 1 (where to save) Enter/←→ toggles local or USB  Enter on a USB row downloads to it"
+        ),
         theme::dim(),
     ));
     items.push(ListItem::new(hint));
@@ -161,7 +170,10 @@ fn render_song_cfg(f: &mut Frame, app: &mut App) {
         })
         .collect();
     let menu = List::new(rows).block(Block::bordered().border_type(BorderType::Rounded).title(
-        Span::styled(" 当前歌曲 · Enter 应用 / Esc 关闭 ", theme::title()),
+        Span::styled(
+            crate::tr!(" 当前歌曲 · Enter 应用 / Esc 关闭 ", " Song · Enter apply / Esc close "),
+            theme::title(),
+        ),
     ));
     f.render_widget(menu, rect);
 }
@@ -181,13 +193,13 @@ fn render_ctx_menu(f: &mut Frame, app: &mut App) {
             } else {
                 Style::default()
             };
-            ListItem::new(Line::from(Span::styled(*s, style)))
+            ListItem::new(Line::from(Span::styled(s.clone(), style)))
         })
         .collect();
     let menu = List::new(list_items).block(
         Block::bordered()
             .border_type(BorderType::Rounded)
-            .title(Span::styled(" 右键菜单 ", theme::title())),
+            .title(Span::styled(crate::tr!(" 右键菜单 ", " Context menu "), theme::title())),
     );
     f.render_widget(menu, rect);
 }
@@ -234,7 +246,10 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
             util::artists_of_into(&mut artists_buf, &s.ar);
             spans.push(Span::styled(artists_buf.as_str(), theme::song_title()));
         }
-        None => spans.push(Span::styled("未在播放", theme::song_title())),
+        None => spans.push(Span::styled(
+            crate::i18n::t("title.not_playing"),
+            theme::song_title(),
+        )),
     }
     use std::fmt::Write as _;
     let mut tbuf = String::with_capacity(8);
@@ -265,7 +280,7 @@ fn render_bottom(f: &mut Frame, area: Rect, app: &mut App) {
     let sel_n = app.selected.len();
     let sel_buf = if sel_n > 0 {
         let mut b = String::with_capacity(16);
-        let _ = write!(b, "  已选 {} 首 ", sel_n);
+        let _ = write!(b, "{}", crate::tr!("  已选 {} 首 ", "  {} selected ", sel_n));
         b
     } else {
         String::new()
@@ -396,16 +411,16 @@ fn render_menu(f: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_playlists(f: &mut Frame, area: Rect, app: &mut App) {
     if app.playlists_loading && app.playlists.is_empty() {
-        render_center(f, area, "歌单推荐加载中...");
+        render_center(f, area, &crate::tr!("歌单推荐加载中...", "Loading playlist picks..."));
         return;
     }
     if app.playlists.is_empty() {
-        render_center(f, area, "暂无歌单 (按 d 刷新?)");
+        render_center(f, area, &crate::tr!("暂无歌单 (按 d 刷新?)", "No playlists yet (press d to refresh?)"));
         return;
     }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Span::styled("歌单推荐", theme::title()));
+        .title(Span::styled(crate::tr!("歌单推荐", "Playlist picks"), theme::title()));
     let inner = block.inner(area);
     let (top, count) = window(
         app.playlists_sel,
@@ -445,11 +460,11 @@ fn render_playlists(f: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_songs(f: &mut Frame, area: Rect, app: &mut App) {
     if app.songs_loading && app.songs.is_empty() {
-        render_center(f, area, "歌曲推荐加载中...");
+        render_center(f, area, &crate::tr!("歌曲推荐加载中...", "Loading song picks..."));
         return;
     }
     if app.songs.is_empty() {
-        render_center(f, area, "暂无推荐歌曲");
+        render_center(f, area, &crate::tr!("暂无推荐歌曲", "No song picks yet"));
         return;
     }
     let tag = |s: &crate::models::Song| app.source_badge(s);
@@ -459,23 +474,23 @@ fn render_songs(f: &mut Frame, area: Rect, app: &mut App) {
         &app.songs,
         app.songs_sel,
         &app.selected,
-        "歌曲推荐",
+        &crate::tr!("歌曲推荐", "Song picks"),
         Some(&tag),
     );
 }
 
 fn render_albums(f: &mut Frame, area: Rect, app: &mut App) {
     if app.albums_loading && app.albums.is_empty() {
-        render_center(f, area, "专辑推荐加载中...");
+        render_center(f, area, &crate::tr!("专辑推荐加载中...", "Loading album picks..."));
         return;
     }
     if app.albums.is_empty() {
-        render_center(f, area, "暂无推荐专辑");
+        render_center(f, area, &crate::tr!("暂无推荐专辑", "No album picks yet"));
         return;
     }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Span::styled("专辑推荐", theme::title()));
+        .title(Span::styled(crate::tr!("专辑推荐", "Album picks"), theme::title()));
     let inner = block.inner(area);
     let (top, count) = window(app.albums_sel, app.albums.len(), inner.height as usize);
     let items: Vec<ListItem> = app
@@ -538,7 +553,7 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
     .block(
         Block::bordered()
             .border_type(BorderType::Rounded)
-            .title(Line::from("搜索")),
+            .title(Line::from(crate::tr!("搜索", "Search"))),
     );
     f.render_widget(input, input_area);
     if app.search_input_focus {
@@ -548,10 +563,14 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
     }
     let (src_name, src_ok) = app.current_source();
     let src_name = src_name.as_str();
-    let types = ["0歌曲", "1歌手", "2歌单", "3专辑"];
+    let types = if crate::i18n::en() {
+        ["0songs", "1artists", "2playlists", "3albums"]
+    } else {
+        ["0歌曲", "1歌手", "2歌单", "3专辑"]
+    };
     let mut spans: Vec<Span> = Vec::with_capacity(6);
     spans.push(Span::styled(
-        format!(" 源:{} ", src_name),
+        crate::tr!(" 源:{} ", " source:{} ", src_name),
         if src_ok {
             theme::primary().add_modifier(ratatui::style::Modifier::BOLD)
         } else {
@@ -582,27 +601,40 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
         let mut names = String::new();
         for (i, f) in app.agg_failed.iter().take(4).enumerate() {
             if i > 0 {
-                names.push('，');
+                names.push(if crate::i18n::en() { ',' } else { '，' });
             }
             names.push_str(f.as_str());
         }
         if app.agg_failed.len() > 4 {
             names.push('…');
         }
-        spans.push(Span::styled(format!("   失败源: {names}"), theme::warn()));
+        spans.push(Span::styled(
+            crate::tr!("   失败源: ", "   failed: ") + &names,
+            theme::warn(),
+        ));
     }
     spans.push(Span::styled(
         if app.search_input_focus {
-            "   Tab→列表 · F1-F4/Alt+数字 换类型"
+            crate::tr!(
+                "   Tab→列表 · F1-F4/Alt+数字 换类型",
+                "   Tab to list · F1-F4/Alt+digit for kind"
+            )
         } else {
-            "   Tab→输入栏 · 直接打字即回输入 · Enter 播放所选"
+            crate::tr!(
+                "   Tab→输入栏 · 直接打字即回输入 · Enter 播放所选",
+                "   Tab to input · just type to jump back · Enter plays"
+            )
         },
         theme::dim(),
     ));
     f.render_widget(Paragraph::new(Line::from(spans)), type_area);
     if app.search_loading {
         // 探测还在跑时把进度也带上，别只显示一个「搜索中」
-        let msg = format!("{} → 搜索中…", app.source_status_suffix());
+        let msg = crate::tr!(
+            "{} → 搜索中…",
+            "{} → searching…",
+            app.source_status_suffix()
+        );
         render_center(f, list_area, &msg);
         return;
     }
@@ -614,17 +646,17 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
     match app.search_type {
         0 => {
             if app.search.is_empty() {
-                render_center(
-                    f,
-                    list_area,
-                    "输入关键词回车搜索歌曲；Tab 到列表；Alt+Enter 多选, d 下载, l 收藏",
-                );
+                { let msg = crate::tr!(
+                        "输入关键词回车搜索歌曲；Tab 到列表；Alt+Enter 多选, d 下载, l 收藏",
+                        "Type keywords and press Enter to search songs; Tab to the list; Alt+Enter multi-selects, d downloads, l favorites"
+                    ); render_center(f, list_area, &msg); }
                 return;
             }
             let tag = |s: &crate::models::Song| app.source_badge(s);
             // 源连通性摘要收在列表块标题行右侧
-            let title = format!(
+            let title = crate::tr!(
                 "搜索结果   源 {}/{}",
+                "Results   sources {}/{}",
                 app.health_ok_count(),
                 app.registry.len()
             );
@@ -640,11 +672,10 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
         }
         1 => {
             if app.search_artists.is_empty() {
-                render_center(
-                    f,
-                    list_area,
-                    "输入关键词回车搜索歌手；Tab 到列表，F2/Alt+1 换类型",
-                );
+                { let msg = crate::tr!(
+                        "输入关键词回车搜索歌手；Tab 到列表，F2/Alt+1 换类型",
+                        "Type keywords and press Enter to search artists; Tab to the list, F2/Alt+1 switches kind"
+                    ); render_center(f, list_area, &msg); }
                 return;
             }
             let tag = |a: &crate::models::ArtistInfo| {
@@ -660,11 +691,10 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
         }
         2 => {
             if app.search_playlists.is_empty() {
-                render_center(
-                    f,
-                    list_area,
-                    "输入关键词回车搜索歌单；Tab 到列表，F3/Alt+2 换类型",
-                );
+                { let msg = crate::tr!(
+                        "输入关键词回车搜索歌单；Tab 到列表，F3/Alt+2 换类型",
+                        "Type keywords and press Enter to search playlists; Tab to the list, F3/Alt+2 switches kind"
+                    ); render_center(f, list_area, &msg); }
                 return;
             }
             let tag = |p: &crate::models::Playlist| {
@@ -680,11 +710,10 @@ fn render_search(f: &mut Frame, area: Rect, app: &mut App) {
         }
         3 => {
             if app.search_albums.is_empty() {
-                render_center(
-                    f,
-                    list_area,
-                    "输入关键词回车搜索专辑；Tab 到列表，F4/Alt+3 换类型",
-                );
+                { let msg = crate::tr!(
+                        "输入关键词回车搜索专辑；Tab 到列表，F4/Alt+3 换类型",
+                        "Type keywords and press Enter to search albums; Tab to the list, F4/Alt+3 switches kind"
+                    ); render_center(f, list_area, &msg); }
                 return;
             }
             let tag = |a: &crate::models::RecAlbum| {
@@ -709,7 +738,7 @@ fn render_artists(
 ) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Span::styled("搜索歌手", theme::title()));
+        .title(Span::styled(crate::tr!("搜索歌手", "Artists"), theme::title()));
     let inner = block.inner(area);
     let (top, count) = window(sel, artists.len(), inner.height as usize);
     let items: Vec<ListItem> = artists
@@ -717,7 +746,12 @@ fn render_artists(
         .skip(top)
         .take(count)
         .map(|a| {
-            let meta = format!("  歌曲 {} · 专辑 {}", a.music_size, a.album_size);
+            let meta = crate::tr!(
+        "  歌曲 {} · 专辑 {}",
+        "  {} songs · {} albums",
+        a.music_size,
+        a.album_size
+    );
             let mut spans = vec![Span::raw(a.name.clone()), Span::styled(meta, theme::dim())];
             if let Some(src) = tag.and_then(|t| t(a)) {
                 spans.push(Span::styled(format!("  {src}"), theme::dim()));
@@ -744,7 +778,7 @@ fn render_playlists_list(
 ) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Span::styled("搜索歌单", theme::title()));
+        .title(Span::styled(crate::tr!("搜索歌单", "Playlists"), theme::title()));
     let inner = block.inner(area);
     let (top, count) = window(sel, pls.len(), inner.height as usize);
     let items: Vec<ListItem> = pls
@@ -753,14 +787,16 @@ fn render_playlists_list(
         .take(count)
         .map(|p| {
             let meta = if p.creator_name().is_empty() {
-                format!(
+                crate::tr!(
                     "  {}播放 · {}首",
+                    "  {} plays · {} tracks",
                     util::fmt_count(p.play_count),
                     p.track_count
                 )
             } else {
-                format!(
+                crate::tr!(
                     "  {} · {}播放 · {}首",
+                    "  {} · {} plays · {} tracks",
                     p.creator_name(),
                     util::fmt_count(p.play_count),
                     p.track_count
@@ -792,7 +828,7 @@ fn render_albums_list(
 ) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Span::styled("搜索专辑", theme::title()));
+        .title(Span::styled(crate::tr!("搜索专辑", "Albums"), theme::title()));
     let inner = block.inner(area);
     let (top, count) = window(sel, albs.len(), inner.height as usize);
     let items: Vec<ListItem> = albs
@@ -837,11 +873,11 @@ fn render_albums_list(
 
 fn render_library(f: &mut Frame, area: Rect, app: &mut App) {
     if app.lib_loading {
-        render_center(f, area, "加载中...");
+        render_center(f, area, &crate::tr!("加载中...", "Loading..."));
         return;
     }
     if app.lib.is_empty() {
-        render_center(f, area, "暂无内容");
+        render_center(f, area, &crate::tr!("暂无内容", "Nothing here"));
         return;
     }
     let tag = |s: &crate::models::Song| app.source_badge(s);
@@ -858,29 +894,37 @@ fn render_library(f: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_favorites(f: &mut Frame, area: Rect, app: &mut App) {
     let title = if app.fav_view == 1 {
-        format!("收藏的歌单 ({} 个)", app.favorites.playlist_len())
+        crate::tr!(
+            "收藏的歌单 ({} 个)",
+            "Favorite playlists ({})",
+            app.favorites.playlist_len()
+        )
     } else {
-        format!("收藏的歌曲 ({} 首, 按 t 切换歌单)", app.favorites.len())
+        crate::tr!(
+            "收藏的歌曲 ({} 首, 按 t 切换歌单)",
+            "Favorite songs ({} tracks, t switches to playlists)",
+            app.favorites.len()
+        )
     };
     if app.fav_view == 1 {
         let pls = app.favorites.playlists();
         if pls.is_empty() {
-            render_center(
-                f,
-                area,
+            let msg = crate::tr!(
                 "暂无收藏歌单 (在歌单界面按 Alt+Enter/右键收藏, t 切换)",
+                "No favorite playlists yet (Alt+Enter or right-click to add on the playlist screen, t switches view)"
             );
+            render_center(f, area, &msg);
             return;
         }
         render_playlists_list(f, area, pls, app.fav_sel, None);
         return;
     }
     if app.favorites.len() == 0 {
-        render_center(
-            f,
-            area,
+        let msg = crate::tr!(
             "暂无收藏歌曲 (在歌曲列表按 Alt+Enter 多选, l 收藏, 右键菜单也可收藏)",
+            "No favorite songs yet (Alt+Enter multi-selects, l favorites, the context menu works too)"
         );
+        render_center(f, area, &msg);
         return;
     }
     let tag = |s: &crate::models::Song| app.source_badge(s);
@@ -903,7 +947,7 @@ fn render_source_details(f: &mut Frame, area: Rect, app: &mut App) {
     let width = area.width.saturating_sub(2) as usize; // 去掉边框
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Span::styled(" 源状态 ", theme::title()));
+        .title(Span::styled(crate::tr!(" 源状态 ", " Source status "), theme::title()));
     let mut rows: Vec<ListItem> = Vec::with_capacity(items.len() + 2);
     for (i, it) in items.iter().enumerate() {
         let reason = app.source_reason(it);
@@ -922,7 +966,10 @@ fn render_source_details(f: &mut Frame, area: Rect, app: &mut App) {
         rows.push(ListItem::new(Line::from(Span::styled(line, style))));
     }
     rows.push(ListItem::new(Line::from(Span::styled(
-        crate::ui::status::truncate(&format!("{suffix} · R 重探 · V 返回结果"), width),
+        crate::ui::status::truncate(
+            &crate::tr!("{} · R 重探 · V 返回结果", "{} · R re-probe · V back to results", suffix),
+            width,
+        ),
         theme::dim(),
     ))));
     let mut state = ListState::default();
@@ -993,7 +1040,7 @@ fn render_song_table(
                 let label = if can_stream {
                     name
                 } else {
-                    format!("{name}·仅搜")
+                    crate::tr!("{}·仅搜", "{} · search only", name)
                 };
                 cells.push(Cell::from(Span::styled(
                     crate::ui::status::pad_left(&label, src_w.saturating_sub(2)) + " ",
@@ -1013,17 +1060,25 @@ fn render_song_table(
         })
         .collect();
     let headers: Vec<&str> = if tag.is_some() {
-        vec!["选", "#", "歌名", "歌手", "源", "专辑", "时长"]
+        if crate::i18n::en() {
+            vec!["•", "#", "Title", "Artist", "Source", "Album", "Time"]
+        } else {
+            vec!["选", "#", "歌名", "歌手", "源", "专辑", "时长"]
+        }
     } else {
-        vec!["选", "#", "歌名", "歌手", "专辑", "时长"]
+        if crate::i18n::en() {
+            vec!["•", "#", "Title", "Artist", "Album", "Time"]
+        } else {
+            vec!["选", "#", "歌名", "歌手", "专辑", "时长"]
+        }
     };
     let header_cells: Vec<Cell> = headers
         .iter()
         .map(|h| {
-            let right = *h == "源" || *h == "时长";
+            let right = *h == "源" || *h == "时长" || *h == "Source" || *h == "Time";
             let w = match *h {
-                "源" => src_w.saturating_sub(2),
-                "时长" => 4,
+                "源" | "Source" => src_w.saturating_sub(2),
+                "时长" | "Time" => 4,
                 _ => 0,
             };
             if right {
@@ -1060,7 +1115,7 @@ fn render_song_table(
 
 fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
     let Some(song) = app.now_playing.clone() else {
-        render_center(f, area, "未在播放");
+        render_center(f, area, crate::i18n::t("title.not_playing"));
         return;
     };
     let st = app.player.state();
@@ -1086,7 +1141,8 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
     // 逐曲自动增益：让用户看到「这首歌被调了多少」，异常歌好排查（暂停后保留最后的值）
     // 首次播放没有整曲标定，这一遍就用固定增益，不显示自动值（免得闪一个假的数）
     let auto_gain = if app.anim.eq_autogain && app.anim.equalizer_on() {
-        app.eq_auto_gain.map(|g| format!("  自动 {g:+.1} dB"))
+        app.eq_auto_gain
+            .map(|g| crate::tr!("  自动 {:+.1} dB", "  auto {:+.1} dB", g))
     } else {
         None
     };
@@ -1211,11 +1267,11 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_lyrics(f: &mut Frame, area: Rect, app: &mut App, time_pos: Option<f64>) {
     let Some(lyr) = &app.lyric else {
-        render_center(f, area, "暂无歌词");
+        render_center(f, area, &crate::tr!("暂无歌词", "No lyrics"));
         return;
     };
     if lyr.lines.is_empty() {
-        render_center(f, area, "暂无歌词");
+        render_center(f, area, &crate::tr!("暂无歌词", "No lyrics"));
         return;
     }
     let cur = match time_pos {
@@ -1259,7 +1315,7 @@ fn render_superdl(f: &mut Frame, area: Rect, app: &mut App) {
     if app.super_running {
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
-            .title(Span::styled(" 超级下载进行中 ", theme::warn()));
+            .title(Span::styled(crate::tr!(" 超级下载进行中 ", " Super download running "), theme::warn()));
         let inner = block.inner(area);
         let lines: Vec<Line> = app
             .super_lines
@@ -1275,21 +1331,23 @@ fn render_superdl(f: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
     if app.super_loading {
-        render_center(f, area, "正在检测 USB 设备...");
+        render_center(f, area, &crate::tr!("正在检测 USB 设备...", "Detecting USB devices..."));
         return;
     }
     if app.super_devices.is_empty() {
-        render_center(
-            f,
-            area,
-            "未检测到 USB 设备 (插入 U 盘后重新进入本界面, 格式化需要 sudo 密码)",
-        );
+        { let msg = crate::tr!(
+                "未检测到 USB 设备 (插入 U 盘后重新进入本界面, 格式化需要 sudo 密码)",
+                "No USB device detected (plug one in and reopen this screen; formatting needs a sudo password)"
+            ); render_center(f, area, &msg); }
         return;
     }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Span::styled(
-            " 选择 USB 设备 (Enter = 格式化并下载热榜音乐, 数据将丢失!) ",
+            crate::tr!(
+                " 选择 USB 设备 (Enter = 格式化并下载热榜音乐, 数据将丢失!) ",
+                " Select a USB device (Enter = format it and write the charts, data will be lost!) "
+            ),
             theme::err(),
         ));
     let inner = block.inner(area);
@@ -1308,8 +1366,16 @@ fn render_superdl(f: &mut Frame, area: Rect, app: &mut App) {
                 "  {}  {}  {}  {}",
                 d.size_gb(),
                 d.model,
-                d.fs.as_deref().unwrap_or("无文件系统"),
-                d.mount.as_deref().unwrap_or("未挂载")
+                d.fs.as_deref().unwrap_or(if crate::i18n::en() {
+                    "no filesystem"
+                } else {
+                    "无文件系统"
+                }),
+                d.mount.as_deref().unwrap_or(if crate::i18n::en() {
+                    "not mounted"
+                } else {
+                    "未挂载"
+                })
             );
             ListItem::new(Line::from(vec![
                 Span::styled(d.path.clone(), theme::primary()),
@@ -1334,19 +1400,22 @@ fn render_superdl(f: &mut Frame, area: Rect, app: &mut App) {
 fn render_downloads(f: &mut Frame, area: Rect, app: &mut App) {
     let tasks = app.downloader.snapshot();
     let (total, done, skipped, failed) = app.downloader.counts();
-    let title = format!(
+    let title = crate::tr!(
         "下载任务  (完成 {} / 跳过 {} / 失败 {} / 共 {})",
-        done, skipped, failed, total
+        "Downloads  (done {} / skipped {} / failed {} / total {})",
+        done,
+        skipped,
+        failed,
+        total
     );
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Span::styled(title, theme::title()));
     if tasks.is_empty() {
-        render_center(
-            f,
-            area,
-            "暂无下载任务 (在歌曲列表按 d 下载单曲, D 批量下载)",
-        );
+        { let msg = crate::tr!(
+                "暂无下载任务 (在歌曲列表按 d 下载单曲, D 批量下载)",
+                "No downloads yet (press d on a song to download it, D for a batch)"
+            ); render_center(f, area, &msg); }
         return;
     }
     let inner = block.inner(area);

@@ -37,17 +37,47 @@ use std::time::{Duration, Instant};
 /// 聚合伪源：搜索时并发问所有 `Ok` 的源再合并
 pub const AGGREGATE_ID: &str = "aggregate";
 
+/// 源分组名按界面语言显示（`国内` / `国际` / `公开免费`）
+pub fn group_display(group: &str) -> &'static str {
+    match (group, crate::i18n::en()) {
+        ("国内", false) => "国内",
+        ("国内", true) => "domestic",
+        ("国际", false) => "国际",
+        ("国际", true) => "international",
+        ("公开免费", false) => "公开免费",
+        ("公开免费", true) => "public/free",
+        (_, false) => "其它",
+        (_, true) => "other",
+    }
+}
+
 /// 打不开详情时的提示文案（纯函数，方便单测）。
 ///
 /// 单源网易云是**能**打开详情的情况，永远不该走到这里；只有聚合里没有网易云条目、
 /// 或者当前源压根没有详情接口（咪咕/QQ 等）才会用这条文案。
 pub fn detail_unsupported_msg(source_id: &str, what: &str) -> String {
+    // what 是「专辑 / 歌单 / 歌手」，按语言取词，避免英文句子里嵌中文
+    let what = match (what, crate::i18n::en()) {
+        ("专辑", false) => "专辑",
+        ("专辑", true) => "album",
+        ("歌单", false) => "歌单",
+        ("歌单", true) => "playlist",
+        ("歌手", false) => "歌手",
+        ("歌手", true) => "artist",
+        (w, _) => w,
+    };
     if source_id == AGGREGATE_ID {
-        format!("这个{what}没有网易云的条目，打不开详情（按 S 换源试试）")
+        crate::tr!(
+            "这个{}没有网易云的条目，打不开详情（按 S 换源试试）",
+            "This {} has no NetEase entry, so its details cannot be opened (press S to switch source)",
+            what
+        )
     } else {
-        format!(
-            "{}源暂不支持{what}详情，按 S 换到网易云或聚合再打开",
-            crate::source::source_display(source_id)
+        crate::tr!(
+            "{}源暂不支持{}详情，按 S 换到网易云或聚合再打开",
+            "{} does not support {} details yet; press S to switch to NetEase or aggregate",
+            crate::source::source_display(source_id),
+            what
         )
     }
 }
@@ -602,9 +632,11 @@ impl App {
         };
         self.super_running = true;
         self.super_lines.clear();
-        self.super_lines.push(format!(
+        self.super_lines.push(crate::tr!(
             "正在准备: {} ({}) - 注意! 该设备将被格式化, 数据会全部丢失",
-            dev.path, dev.model
+            "Preparing: {} ({}) - warning: this device will be formatted, all data will be lost",
+            dev.path,
+            dev.model
         ));
         let api_base = self.cfg.api_base.clone();
         let quality = self.cfg.quality.clone();
@@ -619,12 +651,12 @@ impl App {
                 })
                 .is_err()
             {
-                return (false, "UI 已退出".to_string());
+                return (false, crate::tr!("UI 已退出", "UI has exited"));
             }
             match rrx.recv() {
                 Ok(Ok(())) => (true, String::new()),
                 Ok(Err(e)) => (false, e),
-                Err(_) => (false, "未收到响应".to_string()),
+                Err(_) => (false, crate::tr!("未收到响应", "no response received")),
             }
         };
         thread::spawn(move || {
@@ -650,7 +682,11 @@ impl App {
         self.settings.save(&self.cfg.settings_path);
         self.apply_download_dir();
         self.toast = Some((
-            format!("下载位置: 本地 {}", self.cfg.download_dir.display()),
+            crate::tr!(
+                "下载位置: 本地 {}",
+                "Download location: this computer {}",
+                self.cfg.download_dir.display()
+            ),
             Instant::now(),
         ));
     }
@@ -660,7 +696,7 @@ impl App {
             if self.settings_usb.is_empty() && !self.settings_usb_loading {
                 self.load_settings_usb();
             }
-            self.toast = Some(("未检测到 U盘设备".to_string(), Instant::now()));
+            self.toast = Some((crate::tr!("未检测到 U盘设备", "No USB drive detected"), Instant::now()));
             return;
         };
         let target = dev.part.clone().unwrap_or_else(|| dev.path.clone());
@@ -685,10 +721,10 @@ impl App {
                 self.settings.usb_device = dev.path.clone();
                 self.settings.save(&self.cfg.settings_path);
                 self.apply_download_dir();
-                self.toast = Some((format!("下载位置: U盘 {}", m), Instant::now()));
+                self.toast = Some((crate::tr!("下载位置: U盘 {}", "Download location: USB drive {}", m), Instant::now()));
             }
             _ => {
-                self.toast = Some(("无法挂载 U盘 (请检查设备)".to_string(), Instant::now()));
+                self.toast = Some((crate::tr!("无法挂载 U盘 (请检查设备)", "Could not mount the USB drive (check the device)"), Instant::now()));
             }
         }
     }
@@ -956,7 +992,10 @@ impl App {
         if self.eq_fail >= 2 && !self.eq_fallback {
             self.eq_fallback = true;
             self.toast = Some((
-                "频谱解码失败，已降级为正弦波形（[ui] equalizer_source=synth）".to_string(),
+                crate::tr!(
+                    "频谱解码失败，已降级为正弦波形（[ui] equalizer_source=synth）",
+                    "Waveform decoding failed, falling back to the synthetic placeholder ([ui] equalizer_source=synth)"
+                ),
                 Instant::now(),
             ));
         }
@@ -970,7 +1009,7 @@ impl App {
                     match r {
                         Ok(v) => self.playlists = v,
                         Err(e) => {
-                            self.toast = Some((format!("歌单推荐加载失败: {}", e), Instant::now()))
+                            self.toast = Some((crate::tr!("歌单推荐加载失败: {}", "Could not load playlist picks: {}", e), Instant::now()))
                         }
                     }
                 }
@@ -982,7 +1021,7 @@ impl App {
                             self.songs_sel = 0;
                         }
                         Err(e) => {
-                            self.toast = Some((format!("歌曲推荐加载失败: {}", e), Instant::now()))
+                            self.toast = Some((crate::tr!("歌曲推荐加载失败: {}", "Could not load song picks: {}", e), Instant::now()))
                         }
                     }
                 }
@@ -994,7 +1033,7 @@ impl App {
                             self.albums_sel = 0;
                         }
                         Err(e) => {
-                            self.toast = Some((format!("专辑推荐加载失败: {}", e), Instant::now()))
+                            self.toast = Some((crate::tr!("专辑推荐加载失败: {}", "Could not load album picks: {}", e), Instant::now()))
                         }
                     }
                 }
@@ -1030,7 +1069,7 @@ impl App {
                             self.search_artists = v.artists;
                             self.search_sel = 0;
                         }
-                        Err(e) => self.toast = Some((format!("搜索失败: {}", e), Instant::now())),
+                        Err(e) => self.toast = Some((crate::tr!("搜索失败: {}", "Search failed: {}", e), Instant::now())),
                     }
                 }
                 AppMsg::Probe { gen, id, state } => {
@@ -1166,8 +1205,16 @@ impl App {
                         self.agg_failed.push(f);
                     }
                     if self.search.is_empty() && !self.agg_failed.is_empty() {
-                        let msg = self.agg_failed.join("；");
-                        self.toast = Some((format!("聚合搜索全失败: {msg}"), Instant::now()));
+                        let sep = if crate::i18n::en() { "; " } else { "；" };
+                        let msg = self.agg_failed.join(sep);
+                        self.toast = Some((
+                            crate::tr!(
+                                "聚合搜索全失败: {}",
+                                "Aggregate search failed everywhere: {}",
+                                msg
+                            ),
+                            Instant::now(),
+                        ));
                     }
                 }
                 AppMsg::Duration { source, s_id, dt } => {
@@ -1203,7 +1250,7 @@ impl App {
                             self.lib_sel = 0;
                         }
                         Err(e) => {
-                            self.toast = Some((format!("歌单加载失败: {}", e), Instant::now()))
+                            self.toast = Some((crate::tr!("歌单加载失败: {}", "Could not load the playlist: {}", e), Instant::now()))
                         }
                     }
                 }
@@ -1216,7 +1263,7 @@ impl App {
                             self.lib_sel = 0;
                         }
                         Err(e) => {
-                            self.toast = Some((format!("专辑加载失败: {}", e), Instant::now()))
+                            self.toast = Some((crate::tr!("专辑加载失败: {}", "Could not load the album: {}", e), Instant::now()))
                         }
                     }
                 }
@@ -1229,7 +1276,7 @@ impl App {
                             self.lib_sel = 0;
                         }
                         Err(e) => {
-                            self.toast = Some((format!("歌手歌曲加载失败: {}", e), Instant::now()))
+                            self.toast = Some((crate::tr!("歌手歌曲加载失败: {}", "Could not load the artist's songs: {}", e), Instant::now()))
                         }
                     }
                 }
@@ -1241,7 +1288,7 @@ impl App {
                             self.super_sel = 0;
                         }
                         Err(e) => {
-                            self.toast = Some((format!("USB 设备检测失败: {}", e), Instant::now()))
+                            self.toast = Some((crate::tr!("USB 设备检测失败: {}", "USB scan failed: {}", e), Instant::now()))
                         }
                     }
                 }
@@ -1250,7 +1297,7 @@ impl App {
                     match r {
                         Ok(v) => self.settings_usb = v,
                         Err(e) => {
-                            self.toast = Some((format!("USB 设备检测失败: {}", e), Instant::now()))
+                            self.toast = Some((crate::tr!("USB 设备检测失败: {}", "USB scan failed: {}", e), Instant::now()))
                         }
                     }
                 }
@@ -1268,7 +1315,7 @@ impl App {
                     });
                     let toast = match &self.super_lines[self.super_lines.len() - 1] {
                         s if s.starts_with("❌") => s.clone(),
-                        _ => "超级下载完成".to_string(),
+                        _ => crate::tr!("超级下载完成", "Super download finished"),
                     };
                     self.toast = Some((toast, Instant::now()));
                 }
@@ -1279,7 +1326,7 @@ impl App {
                 AppMsg::Enqueue(r) => match r {
                     Ok(v) => self.enqueue_songs(v),
                     Err(e) => {
-                        self.toast = Some((format!("获取歌单曲目失败: {}", e), Instant::now()))
+                        self.toast = Some((crate::tr!("获取歌单曲目失败: {}", "Could not fetch the playlist tracks: {}", e), Instant::now()))
                     }
                 },
                 AppMsg::PlayUrl(gen, url, autoplay, proxy, used, failures) => {
@@ -1310,8 +1357,9 @@ impl App {
                                                 }
                                             }
                                             self.toast = Some((
-                                                format!(
+                                                crate::tr!(
                                                     "主源取不到流，已换 {} 播放",
+                                                    "Primary source had no stream, playing from {}",
                                                     crate::source::source_display(&src)
                                                 ),
                                                 Instant::now(),
@@ -1339,7 +1387,11 @@ impl App {
                                         .take(4)
                                         .map(|(s, why)| format!("{s}: {why}"))
                                         .collect();
-                                    Some(format!("所有源均取不到流（{}）", items.join(" / ")))
+                                    Some(crate::tr!(
+                        "所有源均取不到流（{}）",
+                        "No source could produce a stream ({})",
+                        items.join(" / ")
+                    ))
                                 };
                                 self.skip_unplayable(detail);
                             }
@@ -1565,11 +1617,17 @@ impl App {
         self.ctx_open = self.ctx_playlist.is_some();
     }
 
-    fn ctx_items(&self) -> Vec<&'static str> {
+    fn ctx_items(&self) -> Vec<String> {
         match self.ctx_kind {
-            0 => vec!["1  下载", "2  收藏"],
-            1 => vec!["1  下载歌单", "2  收藏"],
-            _ => vec!["1  下载专辑"],
+            0 => vec![
+                crate::tr!("1  下载", "1  Download"),
+                crate::tr!("2  收藏", "2  Favorite"),
+            ],
+            1 => vec![
+                crate::tr!("1  下载歌单", "1  Download playlist"),
+                crate::tr!("2  收藏", "2  Favorite"),
+            ],
+            _ => vec![crate::tr!("1  下载专辑", "1  Download album")],
         }
     }
 
@@ -1601,9 +1659,9 @@ impl App {
                     self.favorites.save(&self.cfg.favorites_path);
                     self.toast = Some((
                         if n > 0 {
-                            format!("已收藏: {}", name)
+                            crate::tr!("已收藏: {}", "Added to favorites: {}", name)
                         } else {
-                            "已在收藏中".to_string()
+                            crate::tr!("已在收藏中", "Already in favorites")
                         },
                         Instant::now(),
                     ));
@@ -1611,7 +1669,7 @@ impl App {
             }
             (1, 0) | (2, 0) => {
                 if let Some(p) = pl {
-                    self.toast = Some((format!("正在获取: {}...", p.name), Instant::now()));
+                    self.toast = Some((crate::tr!("正在获取: {}...", "Fetching: {}...", p.name), Instant::now()));
                     let api = self.api.clone();
                     let tx = self.tx.clone();
                     let id = p.id;
@@ -1627,9 +1685,9 @@ impl App {
                     self.favorites.save(&self.cfg.favorites_path);
                     self.toast = Some((
                         if n > 0 {
-                            format!("已收藏歌单: {}", p.name)
+                            crate::tr!("已收藏歌单: {}", "Playlist added to favorites: {}", p.name)
                         } else {
-                            "歌单已在收藏中".to_string()
+                            crate::tr!("歌单已在收藏中", "Playlist already in favorites")
                         },
                         Instant::now(),
                     ));
@@ -1778,7 +1836,10 @@ impl App {
                     self.song_cfg_open = true;
                     self.song_cfg_sel = 0;
                 } else {
-                    self.toast = Some(("还没有在播放的歌曲".to_string(), Instant::now()));
+                    self.toast = Some((
+                        crate::tr!("还没有在播放的歌曲", "Nothing is playing yet"),
+                        Instant::now(),
+                    ));
                 }
             }
             KeyCode::Char('t') => {
@@ -1855,19 +1916,27 @@ impl App {
 
     fn song_cfg_items(&self) -> Vec<String> {
         let Some(song) = &self.now_playing else {
-            return vec!["当前没有播放中的歌曲".to_string()];
+            return vec![crate::tr!("当前没有播放中的歌曲", "Nothing is playing")];
         };
         let fav = if self.favorites.contains(song.id) {
-            "已收藏"
+            crate::tr!("已收藏", "favorited")
         } else {
-            "未收藏"
+            crate::tr!("未收藏", "not favorited")
         };
         vec![
-            format!("收藏 / 取消收藏    {}", fav),
-            "下载这首".to_string(),
-            format!("音质    {}", self.cfg.quality),
-            format!("播放顺序    {}", self.play_mode.label()),
-            format!("来源    {}", crate::source::source_display(&song.source)),
+            crate::tr!("收藏 / 取消收藏    {}", "Favorite / unfavorite    {}", fav),
+            crate::tr!("下载这首", "Download this"),
+            crate::tr!("音质    {}", "Quality    {}", self.cfg.quality),
+            crate::tr!(
+                "播放顺序    {}",
+                "Play order    {}",
+                self.play_mode.label()
+            ),
+            crate::tr!(
+                "来源    {}",
+                "Source    {}",
+                crate::source::source_display(&song.source)
+            ),
         ]
     }
 
@@ -1882,20 +1951,26 @@ impl App {
                     ids.insert(song.id);
                     self.favorites.remove_ids(&ids);
                     self.favorites.save(&self.cfg.favorites_path);
-                    self.toast = Some((format!("已取消收藏 {}", song.name), Instant::now()));
+                    self.toast = Some((
+                    crate::tr!("已取消收藏 {}", "Removed from favorites: {}", song.name),
+                    Instant::now(),
+                ));
                 } else {
                     self.favorites.add(std::slice::from_ref(&song));
                     self.favorites.save(&self.cfg.favorites_path);
-                    self.toast = Some((format!("已收藏 {}", song.name), Instant::now()));
+                    self.toast = Some((
+                        crate::tr!("已收藏 {}", "Added to favorites: {}", song.name),
+                        Instant::now(),
+                    ));
                 }
             }
             1 => {
                 let n = self.downloader.enqueue(vec![song]);
                 self.toast = Some((
                     if n > 0 {
-                        "已加入下载队列".to_string()
+                        crate::tr!("已加入下载队列", "Added to the download queue")
                     } else {
-                        "已在下载队列".to_string()
+                        crate::tr!("已在下载队列", "Already in the download queue")
                     },
                     Instant::now(),
                 ));
@@ -1910,7 +1985,10 @@ impl App {
                 *self.quality.write().unwrap() = next.to_string();
                 self.settings.quality = next.to_string();
                 self.settings.save(&self.cfg.settings_path);
-                self.toast = Some((format!("音质切到 {}，重新取流", next), Instant::now()));
+                self.toast = Some((
+                    crate::tr!("音质切到 {}，重新取流", "Quality set to {}, fetching a new stream", next),
+                    Instant::now(),
+                ));
                 self.reload_for_quality();
             }
             3 => {
@@ -1918,7 +1996,7 @@ impl App {
                 self.settings.play_mode = self.play_mode.as_str().to_string();
                 self.settings.save(&self.cfg.settings_path);
                 self.toast = Some((
-                    format!("播放顺序: {}", self.play_mode.label()),
+                    crate::tr!("播放顺序: {}", "Play order: {}", self.play_mode.label()),
                     Instant::now(),
                 ));
             }
@@ -1958,7 +2036,10 @@ impl App {
         if let Some(caps) = self.source_caps() {
             if !caps.supports(kind) {
                 self.toast = Some((
-                    "当前源不支持这种搜索，已保持原样".to_string(),
+                    crate::tr!(
+                        "当前源不支持这种搜索，已保持原样",
+                        "This source does not support that search kind, kept as is"
+                    ),
                     Instant::now(),
                 ));
                 return;
@@ -1995,7 +2076,7 @@ impl App {
     fn current_source(&self) -> (String, bool) {
         if self.source_id == AGGREGATE_ID {
             let n = self.ok_source_ids().len();
-            return (format!("聚合 · {n} 个可用源"), n > 0);
+            return (crate::tr!("聚合 · {} 个可用源", "Aggregate · {} sources available", n), n > 0);
         }
         match self.registry.get(&self.source_id) {
             // 不在渲染/按键路径里探活（会卡 UI）；可用性只读缓存 + 最近一次搜索结果
@@ -2003,11 +2084,15 @@ impl App {
                 let st = self.health.state(s.id());
                 let healthy = !matches!(st, SourceState::Down | SourceState::NeedsCreds);
                 (
-                    format!("{} · {}", s.group(), s.name()),
+                    format!(
+                        "{} · {}",
+                        group_display(s.group()),
+                        crate::source::source_display(s.id())
+                    ),
                     healthy && !self.failed_sources.contains(&self.source_id),
                 )
             }
-            None => ("未知".to_string(), false),
+            None => (crate::tr!("未知", "unknown"), false),
         }
     }
 
@@ -2030,7 +2115,16 @@ impl App {
         self.selected.clear();
         let (name, avail) = self.current_source();
         self.toast = Some((
-            format!("音乐源: {}{}", name, if avail { "" } else { "（不可用）" }),
+            crate::tr!(
+                "音乐源: {}{}",
+                "Source: {}{}",
+                name,
+                if avail {
+                    String::new()
+                } else {
+                    crate::tr!("（不可用）", " (unavailable)")
+                }
+            ),
             Instant::now(),
         ));
         let q = self.search_input.trim().to_string();
@@ -2068,9 +2162,17 @@ impl App {
         let ok = self.ok_source_ids().len();
         self.toast = Some((
             if self.show_all_sources {
-                format!("源列表: 全部 {} 个（{} 可用，{} 离线）", n, ok, n - ok)
+                crate::tr!(
+                    "源列表: 全部 {} 个（{} 可用，{} 离线）",
+                    "Sources: all {} ({} available, {} offline)",
+                    n, ok, n - ok
+                )
             } else {
-                format!("源列表: 只用可用的 {} 个（V 看全部）", ok)
+                crate::tr!(
+                    "源列表: 只用可用的 {} 个（V 看全部）",
+                    "Sources: {} available only (V shows all)",
+                    ok
+                )
             },
             Instant::now(),
         ));
@@ -2131,8 +2233,9 @@ impl App {
         self.probe_done = self.probe_total;
         self.probe_started = None;
         self.toast = Some((
-            format!(
+            crate::tr!(
                 "源探测超时，已按离线处理（{} 个可用）",
+                "Source probe timed out, treated as offline ({} available)",
                 self.ok_source_ids().len()
             ),
             Instant::now(),
@@ -2144,9 +2247,13 @@ impl App {
         self.start_probe();
         self.toast = Some((
             if self.probe_gen == before {
-                "正在探测中…".to_string()
+                crate::tr!("正在探测中…", "Already probing…")
             } else {
-                format!("重新探测 {} 个源…", self.probe_total)
+                crate::tr!(
+                    "重新探测 {} 个源…",
+                    "Re-probing {} sources…",
+                    self.probe_total
+                )
             },
             Instant::now(),
         ));
@@ -2154,10 +2261,16 @@ impl App {
 
     fn probe_status(&self) -> Option<String> {
         if self.probe_started.is_some() {
-            Some(format!("探测中 {}/{}", self.probe_done, self.probe_total))
+            Some(crate::tr!(
+                "探测中 {}/{}",
+                "probing {}/{}",
+                self.probe_done,
+                self.probe_total
+            ))
         } else if self.health.ok_count() > 0 {
-            Some(format!(
+            Some(crate::tr!(
                 "源 {}/{}",
+                "sources {}/{}",
                 self.health.ok_count(),
                 self.registry.len()
             ))
@@ -2198,13 +2311,17 @@ impl App {
         if targets.is_empty() {
             self.search_loading = false;
             let label = match kind {
-                crate::source::SearchKind::Song => "歌曲",
-                crate::source::SearchKind::Artist => "歌手",
-                crate::source::SearchKind::Playlist => "歌单",
-                crate::source::SearchKind::Album => "专辑",
+                crate::source::SearchKind::Song => crate::tr!("歌曲", "songs"),
+                crate::source::SearchKind::Artist => crate::tr!("歌手", "artists"),
+                crate::source::SearchKind::Playlist => crate::tr!("歌单", "playlists"),
+                crate::source::SearchKind::Album => crate::tr!("专辑", "albums"),
             };
             self.toast = Some((
-                format!("没有可用源支持「{label}」搜索（R 重探或换源后再试）"),
+                crate::tr!(
+                    "没有可用源支持「{label}」搜索（R 重探或换源后再试）",
+                    "No available source supports {label} search (press R to re-probe or pick another source)",
+                    label = label
+                ),
                 Instant::now(),
             ));
             return;
@@ -2220,7 +2337,12 @@ impl App {
                 });
             });
             let mut failed: Vec<String> = stats.timed_out_ids.clone();
-            failed.extend(stats.failed_ids.iter().map(|id| format!("{id}: 失败")));
+            failed.extend(
+            stats
+                .failed_ids
+                .iter()
+                .map(|id| crate::tr!("{}: 失败", "{}: failed", id))
+        );
             let _ = tx.send(AppMsg::AggDone { gen, failed });
         });
     }
@@ -2257,29 +2379,40 @@ impl App {
     /// 每源一句话原因：只靠已缓存的探活状态与配置推断，不发网络请求
     pub(crate) fn source_reason(&self, it: &status::Item) -> String {
         let meting = it.id.starts_with("meting:");
+        let zh = !crate::i18n::en();
         match it.state {
-            SourceState::Ok if it.only_search => "仅搜索（无 cookie）".to_string(),
+            SourceState::Ok if it.only_search => if zh {
+                "仅搜索（无 cookie）"
+            } else {
+                "search only (no cookie)"
+            }
+            .to_string(),
             SourceState::Ok => "ok".to_string(),
-            SourceState::Probing => "探测中…".to_string(),
-            SourceState::Unknown => "未探测".to_string(),
+            SourceState::Probing => if zh { "探测中…" } else { "probing…" }.to_string(),
+            SourceState::Unknown => if zh { "未探测" } else { "not probed" }.to_string(),
             SourceState::NeedsCreds => {
                 if it.id == "jamendo" {
-                    "缺 client_id".to_string()
+                    if zh { "缺 client_id" } else { "missing client_id" }.to_string()
                 } else if meting {
-                    "侧车未启动（或未配 cookie）".to_string()
+                    if zh {
+                        "侧车未启动（或未配 cookie）"
+                    } else {
+                        "sidecar down (or no cookie)"
+                    }
+                    .to_string()
                 } else {
-                    "缺凭据".to_string()
+                    if zh { "缺凭据" } else { "credentials missing" }.to_string()
                 }
             }
             SourceState::Down => {
                 if meting {
-                    "侧车未启动".to_string()
+                    if zh { "侧车未启动" } else { "sidecar down" }.to_string()
                 } else if matches!(it.id.as_str(), "youtube" | "soundcloud")
                     && self.cfg.proxy.is_none()
                 {
-                    "代理未配置".to_string()
+                    if zh { "代理未配置" } else { "no proxy configured" }.to_string()
                 } else {
-                    "不可用".to_string()
+                    if zh { "不可用" } else { "unavailable" }.to_string()
                 }
             }
         }
@@ -2334,7 +2467,7 @@ impl App {
                     let mut text = labels.join("+");
                     // 网易云付费曲目提前标出来，别等点了才知道：`网易云+QQ(直连)·会员`
                     if s.source == "netease" && s.fee != 0 {
-                        text.push_str("·会员");
+                        text.push_str(if crate::i18n::en() { "·member" } else { "·会员" });
                     }
                     return (text, can || ids.len() > 1);
                 }
@@ -2426,7 +2559,11 @@ impl App {
                 None => String::new(),
             };
             self.toast = Some((
-                format!("连续 5 首无法播放（最后一首: {}），已停下{tail}", song.name),
+                crate::tr!(
+                    "连续 5 首无法播放（最后一首: {}），已停下{}",
+                    "5 tracks in a row were unplayable (last: {}), stopping{}",
+                    song.name, tail
+                ),
                 Instant::now(),
             ));
             self.now_playing = None;
@@ -2442,10 +2579,12 @@ impl App {
                 None => String::new(),
             };
             self.toast = Some((
-                format!(
-                    "无法播放: {}（{}），队列里没有别的歌了{reason}",
+                crate::tr!(
+                    "无法播放: {}（{}），队列里没有别的歌了{}",
+                    "Cannot play: {} ({}), nothing else left in the queue{}",
                     song.name,
-                    crate::source::source_display(&song.source)
+                    crate::source::source_display(&song.source),
+                    reason
                 ),
                 Instant::now(),
             ));
@@ -2488,8 +2627,9 @@ impl App {
             }
             None => {
                 self.toast = Some((
-                    format!(
+                    crate::tr!(
                         "无法播放: {}（{}），队列里没有其它可播的曲目",
+                        "Cannot play: {} ({}), no other playable track in the queue",
                         song.name,
                         crate::source::source_display(&song.source)
                     ),
@@ -2748,7 +2888,10 @@ impl App {
             list.retain(|s| self.can_stream_song(s));
             if list.is_empty() {
                 self.toast = Some((
-                    "这首来自「仅搜索」的源，取不到播放地址".to_string(),
+                    crate::tr!(
+                        "这首来自「仅搜索」的源，取不到播放地址",
+                        "This track comes from a search-only source, no playable URL"
+                    ),
                     Instant::now(),
                 ));
                 return;
@@ -2969,9 +3112,15 @@ impl App {
         self.selected.clear();
         let n = songs.len();
         if added > 0 {
-            self.toast = Some((format!("已收藏 {} 首", n), Instant::now()));
+            self.toast = Some((
+                crate::tr!("已收藏 {} 首", "Added {} song(s) to favorites", n),
+                Instant::now(),
+            ));
         } else {
-            self.toast = Some((format!("已在收藏中 (共 {} 首)", n), Instant::now()));
+            self.toast = Some((
+                crate::tr!("已在收藏中 (共 {} 首)", "Already in favorites ({} songs)", n),
+                Instant::now(),
+            ));
         }
     }
 
@@ -2993,7 +3142,10 @@ impl App {
                 self.fav_sel = self.favorites.playlist_len().saturating_sub(1);
             }
             if n > 0 {
-                self.toast = Some((format!("已取消收藏 {} 个歌单", n), Instant::now()));
+                self.toast = Some((
+                crate::tr!("已取消收藏 {} 个歌单", "Removed {} playlist(s) from favorites", n),
+                Instant::now(),
+            ));
             }
             return;
         }
@@ -3012,7 +3164,10 @@ impl App {
             self.fav_sel = self.favorites.len().saturating_sub(1);
         }
         if n > 0 {
-            self.toast = Some((format!("已从收藏移除 {} 首", n), Instant::now()));
+            self.toast = Some((
+                crate::tr!("已从收藏移除 {} 首", "Removed {} song(s) from favorites", n),
+                Instant::now(),
+            ));
         }
     }
 
@@ -3030,16 +3185,25 @@ impl App {
         let added = self.downloader.enqueue(songs);
         self.selected.clear();
         if added > 0 {
-            self.toast = Some((format!("已加入 {} 首下载", added), Instant::now()));
+            self.toast = Some((
+                crate::tr!("已加入 {} 首下载", "Added {} song(s) to downloads", added),
+                Instant::now(),
+            ));
         } else {
-            self.toast = Some((format!("{} 首已在下载队列", n), Instant::now()));
+            self.toast = Some((
+                crate::tr!("{} 首已在下载队列", "{} song(s) already in the download queue", n),
+                Instant::now(),
+            ));
         }
     }
 
     fn enqueue_songs(&mut self, list: Vec<Song>) {
         let n = self.downloader.enqueue(list);
         if n > 0 {
-            self.toast = Some((format!("已加入 {} 首下载", n), Instant::now()));
+            self.toast = Some((
+                crate::tr!("已加入 {} 首下载", "Added {} song(s) to downloads", n),
+                Instant::now(),
+            ));
         }
     }
 
@@ -3055,7 +3219,7 @@ impl App {
             ScreenKind::Favorites => {
                 if self.fav_view == 1 {
                     if let Some(p) = self.favorites.playlists().get(self.fav_sel) {
-                        self.toast = Some((format!("正在获取: {}...", p.name), Instant::now()));
+                        self.toast = Some((crate::tr!("正在获取: {}...", "Fetching: {}...", p.name), Instant::now()));
                         let api = self.api.clone();
                         let tx = self.tx.clone();
                         let id = p.id;
@@ -3071,7 +3235,7 @@ impl App {
             ScreenKind::Playlists => {
                 if let Some(pl) = self.playlists.get(self.playlists_sel) {
                     self.toast =
-                        Some((format!("正在获取歌单曲目: {}...", pl.name), Instant::now()));
+                        Some((crate::tr!("正在获取歌单曲目: {}...", "Fetching playlist tracks: {}...", pl.name), Instant::now()));
                     let api = self.api.clone();
                     let tx = self.tx.clone();
                     let id = pl.id;
@@ -3083,7 +3247,7 @@ impl App {
             }
             ScreenKind::Albums => {
                 if let Some(a) = self.albums.get(self.albums_sel) {
-                    self.toast = Some((format!("正在获取专辑曲目: {}...", a.name), Instant::now()));
+                    self.toast = Some((crate::tr!("正在获取专辑曲目: {}...", "Fetching album tracks: {}...", a.name), Instant::now()));
                     let api = self.api.clone();
                     let tx = self.tx.clone();
                     let id = a.id;

@@ -42,10 +42,16 @@ pub fn dot(it: &Item) -> &'static str {
 
 /// 末尾计数：探测中显示进度，其余显示可用数
 pub fn suffix(probing: bool, done: usize, total: usize, ok: usize) -> String {
-    if probing {
-        format!("探测中 {done}/{total}")
-    } else {
-        format!("{ok}/{total} 可用")
+    suffix_lang(probing, done, total, ok, !crate::i18n::en())
+}
+
+/// 语言由参数给：测试要一次验两版
+pub fn suffix_lang(probing: bool, done: usize, total: usize, ok: usize, zh: bool) -> String {
+    match (probing, zh) {
+        (true, true) => format!("探测中 {done}/{total}"),
+        (true, false) => format!("probing {done}/{total}"),
+        (false, true) => format!("{ok}/{total} 可用"),
+        (false, false) => format!("{ok}/{total} available"),
     }
 }
 
@@ -122,6 +128,19 @@ mod tests {
         assert_eq!(dot(&item("b", SourceState::Down)), "○");
         assert_eq!(dot(&item("c", SourceState::NeedsCreds)), "○");
         assert_eq!(dot(&item("d", SourceState::Probing)), "○");
+    }
+
+    #[test]
+    fn suffix_english_has_no_chinese() {
+        for p in [true, false] {
+            let en = suffix_lang(p, 3, 16, 14, false);
+            assert!(
+                !en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "{en}"
+            );
+        }
+        assert_eq!(suffix_lang(false, 0, 16, 14, false), "14/16 available");
+        assert_eq!(suffix_lang(true, 3, 16, 14, false), "probing 3/16");
     }
 
     #[test]

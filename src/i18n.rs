@@ -32,6 +32,33 @@ pub fn lang() -> Lang {
     }
 }
 
+/// 当前是不是英文模式
+pub fn en() -> bool {
+    lang() == Lang::En
+}
+
+/// 一次性文案（toast、报错）直接给中英两版，按当前语言挑一个。
+///
+/// 骨架文案用上面的 `t(key)` 表；这里给零散的动态句子用，省得为每句话都起个键。
+pub fn pick(zh: impl Into<String>, en_text: impl Into<String>) -> String {
+    if en() {
+        en_text.into()
+    } else {
+        zh.into()
+    }
+}
+
+/// `tr!("中文 {}","English {}", x)` → 按当前语言格式化
+#[macro_export]
+macro_rules! tr {
+    ($zh:literal, $en:literal) => {
+        $crate::i18n::pick($zh, $en)
+    };
+    ($zh:literal, $en:literal, $($arg:tt)*) => {
+        $crate::i18n::pick(format!($zh, $($arg)*), format!($en, $($arg)*))
+    };
+}
+
 /// 按当前语言取一条文案。键在下面这张表里，缺键就回退到中文原文。
 pub fn t(key: &str) -> &'static str {
     let en = lang() == Lang::En;
