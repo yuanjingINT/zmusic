@@ -321,7 +321,9 @@ impl Default for WaveCfg {
 }
 
 /// 软限幅拐点：以下线性，以上 tanh
-const SOFT_KNEE: f32 = 0.75;
+const SOFT_KNEE: f32 = 0.70;
+/// 软限幅的上界：故意留 7% 余量，最外那格点永远填不满，画面上就没有「平顶」
+const TOP_AMP: f32 = 0.93;
 /// 映射窗口（dB）：天花板往下 24 dB 是 0 档
 const SPAN_DB: f32 = 24.0;
 /// 自动增益的目标：整曲 p90 落在 6.5/9 档（留 2.5 档给歌内动态）
@@ -372,7 +374,14 @@ struct WaveAgc {
     played: f32,
     /// 每个 32ms 窗的峰值（dB）：只为算整曲 p90 写缓存，不参与当前这首的显示
     peaks: Vec<f32>,
+    /// 显示用的峰值包络（线性）：起得快、落得慢。
+    /// 画高 = 当前峰值 / 包络 → 最近的最高峰永远画到 HEAD_ROOM，而不是撞天花板。
+    /// 这就是「不要平顶」的正解：靠相对包络，而不是把超出部分硬切掉。
+    env: f32,
 }
+
+/// 画面上永远给顶部留的余量：最响处只画到 90%，所以不会出现一排等高的平顶
+const HEAD_ROOM: f32 = 0.90;
 
 impl WaveAgc {
     /// `target_db`：缓存命中就直接给整曲标定（第一秒就到位）；None = 首次播放
@@ -390,6 +399,7 @@ impl WaveAgc {
             ceiling_db: ceiling,
             played: 0.0,
             peaks: Vec::with_capacity(4096),
+            env: 1e-3,
         }
     }
 
@@ -466,22 +476,34 @@ impl WaveAgc {
     /// 关掉自动增益时才走老的手动映射（归一化后再乘倍率）。
     fn x_pre(&self, peak: f32) -> f32 {
         let p = Self::peak_db(peak);
+        // 这里**不夹到 1.0**：夹了就等于丢信息，响的地方全挤在天花板，
+        // 画出来就是一排等高的平顶。超出的部分要留给 amp() 去做软压缩。
         if self.autogain {
-            ((p + self.effective_gain_db() + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0)
+            (p + self.effective_gain_db() + SPAN_DB) / SPAN_DB
         } else {
-            ((p - self.ceiling_db + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0) * self.user_gain
+            ((p - self.ceiling_db + SPAN_DB) / SPAN_DB) * self.user_gain
         }
+    }
+
+    fn amp_env(&mut self, peak: f32) -> f32 {
+        let raw = self.amp(peak).min(TOP_AMP);
+        // 起得快（立刻跟住峰值）、落得慢（约 3 秒半衰），这样波形顶部一直是活的
+        let decay = 0.995f32;
+        self.env = (self.env * decay).max(raw).max(1e-3);
+        (raw / self.env * HEAD_ROOM).clamp(0.0, HEAD_ROOM)
     }
 
     fn amp(&self, peak: f32) -> f32 {
         let x = self.x_pre(peak);
-        if self.soft_clip && x > SOFT_KNEE {
-            // 超出拐点用 tanh 挤向 1：响处不硬切成一条线
-            let t = ((x - SOFT_KNEE) / (1.0 - SOFT_KNEE)).tanh();
-            (SOFT_KNEE + (1.0 - SOFT_KNEE) * t).clamp(0.0, 1.0)
-        } else {
-            x.clamp(0.0, 1.0)
+        if x <= SOFT_KNEE {
+            return x.max(0.0);
         }
+        // 软限幅：从拐点往后是**指数饱和**，永远逼近 TOP_AMP 但到不了。
+        // 上界留一点余量（0.93 而不是 1.0），最外那一格点永远填不满，
+        // 所以画面上不会出现「一排等高的平顶」——这正是用户要的效果。
+        let span = (TOP_AMP - SOFT_KNEE).max(1e-3);
+        let t = 1.0 - (-(x - SOFT_KNEE) / span).exp();
+        (SOFT_KNEE + span * t).clamp(0.0, TOP_AMP)
     }
 }
 
@@ -646,7 +668,7 @@ impl PcmAnalyzer {
                     if let Some(f) = dump.as_mut() {
                         use std::io::Write;
                         // 列：1 秒 2 原始dB 3 level(0..9) 4 自动增益dB 5 p90dB 6 段号 7 平顶 8 生效增益dB
-                        let level = wagc.amp(peak) * 9.0;
+                        let level = wagc.amp_env(peak) * 9.0;
                         let p90 = wagc.p90_db();
                         // 平顶 = 归一化前已经到/超天花板（1.0 = 正好顶到）
                         let flat = if wagc.x_pre(peak) >= 0.995 {
@@ -692,7 +714,7 @@ impl PcmAnalyzer {
                     *gain_cell.lock().unwrap() = wagc.auto_gain_db();
                     {
                         let mut w = wave.lock().unwrap();
-                        w.samples.push(wagc.amp(peak));
+                        w.samples.push(wagc.amp_env(peak));
                         w.seq += 1;
                         if w.samples.len() > 2048 {
                             w.samples.drain(..1024);
@@ -854,7 +876,9 @@ mod tests {
             Some(g),
         );
         assert!((hard.amp(db(-12.0)) * 9.0 - 6.5).abs() < 0.05);
-        assert_eq!(hard.amp(1.0), 1.0);
+        // 满刻度也不许画到顶（顶部留一格余量，避免平顶）
+        assert!(hard.amp(1.0) < TOP_AMP);
+        assert!(hard.amp(1.0) > 0.85);
     }
 
     #[test]
