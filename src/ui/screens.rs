@@ -1108,13 +1108,17 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
     // 频谱：优先真解码数据，未就绪/降级时用慢呼吸示意波形；12 段（窄终端 8、宽屏 16）
     let playing = !st.idle && !st.paused && st.time_pos.is_some();
     let t_secs = app.started.elapsed().as_secs_f64();
+    // 段数随宽度：宽屏 16、常规 12、窄屏 8、极窄 4（<40 列也不 panic）
     let n_bands = if area.width >= 100 {
         16
     } else if area.width >= 80 {
         12
-    } else {
+    } else if area.width >= 40 {
         8
-    };
+    } else {
+        4
+    }
+    .min((area.width as usize / 2).max(2));
     let spectrum: Option<(Vec<u8>, Vec<u8>)> = if app.anim.equalizer_on() && playing {
         match app.eq_analyzer.as_ref().map(|a| a.frame()) {
             Some(f) if !f.levels.is_empty() => Some((
@@ -1130,31 +1134,36 @@ fn render_now_playing(f: &mut Frame, area: Rect, app: &mut App) {
         None
     };
     if let Some((levels, peaks)) = spectrum {
-        let lines = crate::ui::anim::bars_rows_with_peaks(&levels, &peaks, rows_n);
-        for (i, line) in lines.iter().enumerate() {
-            // 左中右三段用不同亮度：低频暗、中频强调、高频最亮
-            let mut spans: Vec<Span> = Vec::new();
-            let n = line.chars().count();
-            for (idx, ch) in line.chars().enumerate() {
-                let style = if idx < n / 3 {
-                    theme::dim()
-                } else if idx < n * 2 / 3 {
+        // 2 格宽柱子 + 1 格间距，左右各留 2 格；宽度不够自动降级
+        let margin = 2u16;
+        let avail = area.width.saturating_sub(margin * 2) as usize;
+        let (bands, band_w, gap) = crate::ui::anim::layout(avail, n_bands);
+        let lv = crate::ui::eq::merge_bands(&levels, bands);
+        let pk = crate::ui::eq::merge_bands(&peaks, bands);
+        let lines = crate::ui::anim::spectrum_rows(&lv, &pk, rows_n, band_w, gap);
+        for (i, cells) in lines.iter().enumerate() {
+            let mut spans: Vec<Span> = Vec::with_capacity(cells.len());
+            for c in cells {
+                // 颜色按「高度」分档：低暗、中强调、顶亮
+                // 按高度分档：顶行/峰值亮白，中段强调色，底部暗
+                let style = if c.ch == '▔' || c.from_bottom + 1 >= rows_n {
+                    theme::song_title()
+                } else if c.from_bottom * 3 >= rows_n {
                     theme::primary()
                 } else {
-                    theme::song_title()
+                    theme::dim()
                 };
-                spans.push(Span::styled(ch.to_string(), style));
+                spans.push(Span::styled(c.ch.to_string(), style));
             }
             let row = Rect::new(
-                spec.x + 2,
+                spec.x + margin,
                 spec.y + i as u16,
-                spec.width.saturating_sub(4),
+                spec.width.saturating_sub(margin * 2),
                 1,
             );
             f.render_widget(Paragraph::new(Line::from(spans)), row);
         }
     }
-
     // 进度：平滑进度条（主题色）+ 右侧时间
     if app.anim.smooth_progress_on() {
         let label_w = (UnicodeWidthStr::width(time_label.as_str()) as u16 + 2).min(prog.width);

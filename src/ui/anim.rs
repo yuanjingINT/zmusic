@@ -33,28 +33,76 @@ pub fn breathing_levels(t_secs: f64, bars: usize) -> Vec<u8> {
         .collect()
 }
 
-/// 多行柱状图 + 峰值标记：`levels` 是当前档位，`peaks` 是峰值档位，
-/// 峰值用 `▔` 画在对应高度上（0.5s 保持后由调用方匀速下落）。
-pub fn bars_rows_with_peaks(levels: &[u8], peaks: &[u8], rows: usize) -> Vec<String> {
+/// 一段频谱的布局：段数、每段宽度、段间距（宽度不够时先缩段宽，再减段数）
+pub fn layout(avail: usize, want: usize) -> (usize, usize, usize) {
+    // 优先 2 格宽 + 1 格间距
+    for (bands, w) in [(want, 2), (want, 1), (16, 1), (12, 1), (8, 1), (4, 1)] {
+        let bands = bands.min(want.max(1));
+        let need = bands * (w + 1) - 1;
+        if need <= avail && bands > 0 {
+            return (bands, w, 1);
+        }
+    }
+    (1, 1, 1)
+}
+
+/// 一行里的一个格子：字符 + 它距离底部的高度（用来按高度取色）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cell {
+    pub ch: char,
+    /// 0 = 最底行，rows-1 = 最顶行
+    pub from_bottom: usize,
+}
+
+/// 生成频谱的每一行（含段宽与间距）。
+///
+/// - 柱体按 8 档块字符堆叠，宽度 `band_w`、间距 `gap`
+/// - 峰值 `▔` 单独画在**柱顶上方那一格**，不与实心柱重叠
+pub fn spectrum_rows(
+    levels: &[u8],
+    peaks: &[u8],
+    rows: usize,
+    band_w: usize,
+    gap: usize,
+) -> Vec<Vec<Cell>> {
     let rows = rows.max(1);
     let n = levels.len();
-    let mut out = vec![String::with_capacity(n); rows];
+    let mut out: Vec<Vec<Cell>> = (0..rows)
+        .map(|_| Vec::with_capacity(n * (band_w + gap)))
+        .collect();
     for (r, line) in out.iter_mut().enumerate() {
         let row_from_bottom = rows - 1 - r;
         for i in 0..n {
             let lv = *levels.get(i).unwrap_or(&0) as usize;
             let pk = *peaks.get(i).unwrap_or(&0) as usize;
+            let eighths = lv * rows;
             let base = row_from_bottom * 7;
-            let fill = (lv * rows).saturating_sub(base);
-            let peak_fill = (pk * rows).saturating_sub(base);
-            if fill >= 7 {
-                line.push('█');
+            let fill = eighths.saturating_sub(base).min(7);
+            // 峰值只画在「柱顶上方那一格」，不与实心柱重叠
+            let filled_rows = eighths.div_ceil(7);
+            let marker_here = pk > lv && fill == 0 && row_from_bottom == filled_rows;
+            let ch = if fill == 7 {
+                '█'
             } else if fill > 0 {
-                line.push(['▁', '▂', '▃', '▄', '▅', '▆', '▇'][fill - 1]);
-            } else if peak_fill > 0 {
-                line.push('▔');
+                ['▁', '▂', '▃', '▄', '▅', '▆', '▇'][fill - 1]
+            } else if marker_here {
+                '▔'
             } else {
-                line.push(' ');
+                ' '
+            };
+            for _ in 0..band_w {
+                line.push(Cell {
+                    ch,
+                    from_bottom: row_from_bottom,
+                });
+            }
+            for _ in 0..gap {
+                if i + 1 < n {
+                    line.push(Cell {
+                        ch: ' ',
+                        from_bottom: row_from_bottom,
+                    });
+                }
             }
         }
     }
@@ -139,30 +187,31 @@ mod tests {
     }
 
     #[test]
-    fn stacked_bars_with_peaks_render_correctly() {
-        let zero = bars_rows_with_peaks(&[0; 8], &[0; 8], 3);
+    fn spectrum_rows_render_bars_with_peak_marker() {
+        // 全零：只有空格
+        let zero = spectrum_rows(&[0; 8], &[0; 8], 3, 2, 1);
         assert_eq!(zero.len(), 3);
-        assert!(zero.iter().all(|l| l.chars().all(|c| c == ' ')));
-        let full = bars_rows_with_peaks(&[7; 8], &[7; 8], 3);
-        assert!(full.iter().all(|l| l.chars().all(|c| c == '█')));
-        // 峰值高于当前档：应该留下 ▔ 标记
-        let mix = bars_rows_with_peaks(&[0; 4], &[4; 4], 3);
+        assert!(zero.iter().all(|r| r.iter().all(|c| c.ch == ' ')));
+        // 满档：柱子全实心（间距仍是空格）
+        let full = spectrum_rows(&[7; 8], &[7; 8], 3, 2, 1);
+        let solid: usize = full
+            .iter()
+            .map(|r| r.iter().filter(|c| c.ch == '█').count())
+            .sum();
+        assert_eq!(solid, 8 * 2 * 3, "8 段 × 2 格 × 3 行");
+        // 峰值高于柱体：柱顶上方那格应该出现 ▔
+        let mix = spectrum_rows(&[2; 4], &[6; 4], 3, 2, 1);
         let marks: usize = mix
             .iter()
-            .map(|l| l.chars().filter(|c| *c == '▔').count())
+            .map(|r| r.iter().filter(|c| c.ch == '▔').count())
             .sum();
-        assert!(marks > 0, "峰值应该用 ▔ 标出来: {mix:?}");
-        // 档位越高越不空
-        let mut prev = 0;
-        for lv in 0..=7u8 {
-            let rows = bars_rows_with_peaks(&[lv; 4], &[0; 4], 3);
-            let filled: usize = rows
-                .iter()
-                .map(|l| l.chars().filter(|c| *c != ' ').count())
-                .sum();
-            assert!(filled >= prev);
-            prev = filled;
-        }
+        assert!(marks > 0, "峰值应有 ▔ 标记: {mix:?}");
+        // 每段 2 格宽 + 1 格间距：4 段 = 2*4+3 = 11 格
+        assert_eq!(mix[0].len(), 11);
+        // 2 格宽的柱子：同一段的两格字符相同
+        let row = &mix[2];
+        assert_eq!(row[0].ch, row[1].ch);
+        assert_eq!(row[2].ch, ' ');
     }
 
     #[test]

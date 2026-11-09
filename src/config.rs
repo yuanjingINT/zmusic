@@ -49,6 +49,8 @@ fade = true
 equalizer_fps = 30
 # 均衡器数据来源：pcm = 真解码取频谱（多一份带宽）；synth = 正弦波形（不额外拉流）
 equalizer_source = "pcm"
+# 自动增益：用最近 10 秒的能量分位数动态标定 dB 范围（安静段自动压到 1-2 档）
+eq_agc = true
 
 [jamendo]
 # Jamendo 免费申请的 client_id（https://devportal.jamendo.com/）
@@ -79,6 +81,8 @@ struct Ui {
     equalizer_fps: Option<u8>,
     #[serde(default)]
     equalizer_source: Option<String>,
+    #[serde(default)]
+    eq_agc: Option<bool>,
 }
 
 /// 均衡器数据来源
@@ -103,6 +107,8 @@ pub struct Animations {
     pub equalizer_fps: u8,
     /// 频谱来源：pcm / synth
     pub equalizer_source: EqSource,
+    /// 自动增益标定（默认开）
+    pub eq_agc: bool,
 }
 
 impl Default for Animations {
@@ -115,6 +121,7 @@ impl Default for Animations {
             fade: true,
             equalizer_fps: 30,
             equalizer_source: EqSource::Pcm,
+            eq_agc: true,
         }
     }
 }
@@ -296,6 +303,7 @@ impl Config {
                 smooth_progress: parsed.ui.smooth_progress.unwrap_or(true),
                 fade: parsed.ui.fade.unwrap_or(true),
                 equalizer_fps: pick_u8(env, "ZMUSIC_EQ_FPS", parsed.ui.equalizer_fps, 30),
+                eq_agc: pick_bool(env, "ZMUSIC_EQ_AGC", parsed.ui.eq_agc, true),
                 equalizer_source: match pick("ZMUSIC_EQ_SOURCE", parsed.ui.equalizer_source, "pcm")
                     .as_str()
                 {

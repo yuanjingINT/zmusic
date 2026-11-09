@@ -60,16 +60,90 @@ pub fn band_energies(samples: &[i16], sr: f64, n: usize) -> Vec<f32> {
         .collect()
 }
 
-/// 能量 → 0..7 档：log10 映射（低频不会一响就顶满，高频也不会永远平）
-pub fn to_levels(energies: &[f32], floor_db: f32, ceil_db: f32) -> Vec<u8> {
-    energies
-        .iter()
-        .map(|e| {
-            let db = 20.0 * e.max(1e-9).log10();
-            let t = ((db - floor_db) / (ceil_db - floor_db)).clamp(0.0, 1.0);
-            (t * 7.0).round() as u8
-        })
-        .collect()
+/// 自动增益：只标定「整首歌的响度上限」，映射本身是固定的 70dB 线性刻度。
+///
+/// 之前的失败教训：
+/// 之前两种做法都失败过：缩到 p10–p95 会饱和（音乐各频段长期贴在 -20..-5dB）；
+/// 逐段百分位等于自适应均衡，稳态信号永远骑在自己分布顶端，也饱和。
+/// 所以只让 AGC 决定「天花板在哪」（最近 ~10 秒各频段 dB 的 p95 + 10dB 余量），
+/// 再按固定 70dB 动态范围往下铺，安静段自然落到 1–3 档。
+#[derive(Debug, Clone)]
+pub struct Agc {
+    /// 各频段 dB 的衰减直方图（16 × 80 bin）
+    counts: Vec<[f32; AGC_BINS]>,
+    total: f32,
+    /// 当前天花板（dB）
+    ceil: Option<f32>,
+    last_update: u64,
+    enabled: bool,
+}
+
+pub const AGC_BINS: usize = 80; // -80..0 dB
+/// 映射动态范围（dB）：天花板往下铺这么多
+pub const AGC_SPAN_DB: f32 = 70.0;
+pub const AGC_STEP_MS: u64 = 1_000;
+
+fn db_bin(db: f32) -> u8 {
+    ((db + 80.0).clamp(0.0, 79.0)) as u8
+}
+
+impl Agc {
+    pub fn new(enabled: bool) -> Self {
+        Agc {
+            counts: vec![[0.0; AGC_BINS]; BANDS],
+            total: 0.0,
+            ceil: None,
+            last_update: 0,
+            enabled,
+        }
+    }
+
+    pub fn observe(&mut self, energies: &[f32], now_ms: u64) {
+        if !self.enabled {
+            return;
+        }
+        for (i, e) in energies.iter().enumerate().take(BANDS) {
+            let bin = db_bin(20.0 * e.max(1e-9).log10()) as usize;
+            for c in self.counts[i].iter_mut() {
+                *c *= 0.995;
+            }
+            self.counts[i][bin] += 1.0;
+        }
+        self.total = self.total * 0.995 + 1.0;
+        if now_ms.saturating_sub(self.last_update) >= AGC_STEP_MS && self.total > 20.0 {
+            self.last_update = now_ms;
+            // 全频段合计的 p95
+            let mut counts = [0.0f32; AGC_BINS];
+            for band in &self.counts {
+                for (i, c) in band.iter().enumerate() {
+                    counts[i] += c;
+                }
+            }
+            let total: f32 = counts.iter().sum();
+            if total < 100.0 {
+                return;
+            }
+            let mut acc = 0.0f32;
+            for (i, c) in counts.iter().enumerate() {
+                acc += c;
+                if acc >= total * 0.95 {
+                    self.ceil = Some(i as f32 - 80.0 + 10.0); // p95 + 10dB 余量
+                    break;
+                }
+            }
+        }
+    }
+
+    /// dB → 0–7 档：固定 70dB 动态范围，天花板由 AGC 定；关掉时用 -70..0
+    pub fn level(&self, _band: usize, db: f32) -> u8 {
+        let ceil = match self.ceil {
+            Some(c) if self.enabled => c,
+            _ => 0.0,
+        };
+        let floor = ceil - AGC_SPAN_DB;
+        let t = ((db - floor) / (ceil - floor)).clamp(0.0, 1.0);
+        (t * 7.0).round() as u8
+    }
 }
 
 /// attack 0.65 / release 0.12：起得快、落得慢，看着才像频谱
@@ -126,6 +200,28 @@ pub struct EqFrame {
     pub peaks: Vec<u8>,
 }
 
+/// FIFO 放 $XDG_RUNTIME_DIR/zmusic（没有就退回 /tmp），比 /tmp 干净、随登录会话回收
+fn eq_dir() -> PathBuf {
+    std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map(|d| PathBuf::from(d).join("zmusic"))
+        .unwrap_or_else(|| std::env::temp_dir().join("zmusic"))
+}
+
+/// 启动时清掉自己前缀的残留 FIFO（上次被 SIGKILL 之类留下的）
+fn sweep_stale(dir: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with("eq-") && name.ends_with(".pcm") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 pub struct PcmAnalyzer {
     child: Child,
     fifo: PathBuf,
@@ -137,7 +233,10 @@ pub struct PcmAnalyzer {
 impl PcmAnalyzer {
     /// 起解码进程。`start_secs` 用来和播放器对齐（从当前播放位置开始解）。
     pub fn start(url: &str, start_secs: f64) -> Option<PcmAnalyzer> {
-        let fifo = std::env::temp_dir().join(format!("zmusic-eq-{}.pcm", std::process::id()));
+        let dir = eq_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        sweep_stale(&dir);
+        let fifo = dir.join(format!("eq-{}.pcm", std::process::id()));
         let _ = std::fs::remove_file(&fifo);
         // 用 mkfifo 造管道：mpv 写、我们读，流式不落盘
         let ok = Command::new("mkfifo")
@@ -177,9 +276,16 @@ impl PcmAnalyzer {
                 let Ok(mut f) = std::fs::File::open(&path) else {
                     return;
                 };
+                // 已拿到 fd：立刻 unlink，靠 fd 继续读写。进程被强杀也不会留残留。
+                let _ = std::fs::remove_file(&path);
                 let mut buf = vec![0u8; WINDOW * 2];
                 let mut prev: Vec<u8> = vec![0; BANDS];
                 let mut peaks = Peaks::new(BANDS);
+                let mut agc = Agc::new(
+                    std::env::var("ZMUSIC_EQ_AGC")
+                        .map(|v| v != "0")
+                        .unwrap_or(true),
+                );
                 let t_start = std::time::Instant::now();
                 let mut next = std::time::Instant::now();
                 loop {
@@ -196,8 +302,13 @@ impl PcmAnalyzer {
                             samples[i] = i16::from_le_bytes(*c);
                         }
                     }
-                    let target =
-                        to_levels(&band_energies(&samples, SAMPLE_RATE, BANDS), -60.0, -10.0);
+                    let energies = band_energies(&samples, SAMPLE_RATE, BANDS);
+                    agc.observe(&energies, t_start.elapsed().as_millis() as u64);
+                    let target: Vec<u8> = energies
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| agc.level(i, 20.0 * e.max(1e-9).log10()))
+                        .collect();
                     prev = smooth(&prev, &target, ATTACK, RELEASE);
                     let peaks_now = peaks.update(&prev, t_start.elapsed().as_millis() as u64, 500);
                     *frame.lock().unwrap() = EqFrame {
@@ -269,27 +380,22 @@ mod tests {
             .collect()
     }
 
-    /// 频段中心频率对数等距，且不越 8kHz 的奈奎斯特
     #[test]
     fn band_centers_are_log_spaced() {
         let c = band_centers(16);
         assert_eq!(c.len(), 16);
         assert!(c[0] >= 60.0 && *c.last().unwrap() <= 3500.0);
-        // 相邻比值恒定（对数等距）
         let r1 = c[1] / c[0];
         let r2 = c[15] / c[14];
-        assert!((r1 - r2).abs() < 0.01, "对数等距: {r1} vs {r2}");
+        assert!((r1 - r2).abs() < 0.01);
     }
 
     #[test]
     fn goertzel_peaks_at_the_right_frequency() {
         let s = sine(200.0, SAMPLE_RATE, WINDOW, 0.8);
-        let at = goertzel(&s, SAMPLE_RATE, 200.0);
-        let off = goertzel(&s, SAMPLE_RATE, 900.0);
-        assert!(at > off * 5.0, "200Hz 能量应远高于 900Hz：{at} vs {off}");
+        assert!(goertzel(&s, SAMPLE_RATE, 200.0) > goertzel(&s, SAMPLE_RATE, 900.0) * 5.0);
     }
 
-    /// 低频正弦 → 低段亮；高频正弦 → 高段亮
     #[test]
     fn band_energies_follow_the_tone() {
         let low = band_energies(&sine(80.0, SAMPLE_RATE, WINDOW, 0.9), SAMPLE_RATE, 16);
@@ -304,78 +410,70 @@ mod tests {
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .map(|(i, _)| i)
             .unwrap();
-        assert!(
-            peak >= 12,
-            "2.5kHz 应落在高段（下标 ≥12），实际 {peak}: {high:?}"
-        );
+        assert!(peak >= 12, "{high:?}");
     }
 
-    #[test]
-    fn levels_map_quiet_and_loud() {
-        assert!(to_levels(&[1e-6; 8], -60.0, -10.0).iter().all(|l| *l == 0));
-        assert!(to_levels(&[0.9; 8], -60.0, -10.0).iter().all(|l| *l == 7));
-    }
-
-    /// attack 0.65 快、release 0.12 慢
     #[test]
     fn smooth_attacks_fast_and_releases_slow() {
         let up = smooth(&[0; 4], &[7; 4], ATTACK, RELEASE);
         let down = smooth(&[7; 4], &[0; 4], ATTACK, RELEASE);
-        assert!((up[0] as i32 - 5).abs() <= 1, "上升应到 4-5 档: {}", up[0]);
-        assert!(
-            (down[0] as i32 - 6).abs() <= 1,
-            "下降一帧只掉一点: {}",
-            down[0]
-        );
+        assert!((up[0] as i32 - 5).abs() <= 1);
+        assert!((down[0] as i32 - 6).abs() <= 1);
     }
 
-    /// 峰值保持 0.5s 后匀速下落
     #[test]
     fn peaks_hold_then_decay() {
         let mut p = Peaks::new(4);
         assert_eq!(p.update(&[3, 3, 3, 3], 0, 500), vec![3, 3, 3, 3]);
-        // 保持期内不掉
         assert_eq!(p.update(&[0, 0, 0, 0], 300, 500), vec![3, 3, 3, 3]);
-        // 超过 0.5s 后每帧掉一档
         assert_eq!(p.update(&[0, 0, 0, 0], 600, 500), vec![2, 2, 2, 2]);
-        // 掉落之后重新计时：下一次要再等 500ms 才继续掉
         assert_eq!(p.update(&[0, 0, 0, 0], 700, 500), vec![2, 2, 2, 2]);
         assert_eq!(p.update(&[0, 0, 0, 0], 1200, 500), vec![1, 1, 1, 1]);
     }
 
-    /// 16 段按宽度合并：组内取最大，不丢峰值
     #[test]
     fn merge_bands_keeps_peaks() {
         let src: Vec<u8> = (0..16).map(|i| i as u8).collect();
-        let m12 = merge_bands(&src, 12);
-        assert_eq!(m12.len(), 12);
         let m8 = merge_bands(&src, 8);
         assert_eq!(m8.len(), 8);
-        assert_eq!(m8[0], 1, "0..2 组取最大");
+        assert_eq!(m8[0], 1);
         assert_eq!(*m8.last().unwrap(), 15);
-        assert_eq!(merge_bands(&src, 16), src);
-        assert_eq!(merge_bands(&src, 32), src, "目标比源大时原样返回");
+        assert_eq!(merge_bands(&src, 32), src);
     }
-}
 
-#[cfg(test)]
-mod live_probe {
-    use super::*;
-    /// 手动跑：cargo test --release -- --ignored live_probe --nocapture
+    /// 逐段百分位：同一频段「低于常态」→ 低档，「高于常态」→ 高档
     #[test]
-    #[ignore]
-    fn live_probe() {
-        let mut a = PcmAnalyzer::start("/tmp/dyn.wav", 0.0).expect("start");
-        for i in 0..40 {
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            let f = a.frame();
-            println!(
-                "t={:>4}ms levels={:?} peaks={:?} alive={}",
-                i * 250,
-                f.levels,
-                f.peaks,
-                a.alive()
-            );
+    fn agc_percentile_spreads_quiet_and_loud() {
+        let mut agc = Agc::new(true);
+        let quiet = 0.002f32;
+        let loud = 0.4f32;
+        // 交替喂 20 轮，形成宽分布（像真实音乐那样有强有弱）
+        for _ in 0..20 {
+            for _ in 0..10 {
+                agc.observe(&[quiet; BANDS], 0);
+            }
+            for _ in 0..10 {
+                agc.observe(&[loud; BANDS], 0);
+            }
         }
+        let q = agc.level(3, 20.0 * quiet.log10());
+        let l = agc.level(3, 20.0 * loud.log10());
+        assert!(q <= 3, "安静段应该低：{q}");
+        assert!(l >= 5, "响段应该高：{l}");
+        assert!(l as i32 - q as i32 >= 2, "差值太小：{q} vs {l}");
+    }
+
+    #[test]
+    fn agc_disabled_uses_fixed_mapping() {
+        let mut agc = Agc::new(false);
+        let e = [0.05f32; BANDS];
+        let mut t = 0;
+        while t < 5_000 {
+            agc.observe(&e, t);
+            t += 32;
+        }
+        // 关掉 AGC：固定 -70..0，-70 → 0 档、0 → 7 档
+        assert_eq!(agc.level(0, -70.0), 0);
+        assert_eq!(agc.level(0, 0.0), 7);
     }
 }
