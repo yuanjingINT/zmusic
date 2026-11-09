@@ -230,9 +230,23 @@ fn sweep_stale(dir: &std::path::Path) {
     };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with("eq-") && name.ends_with(".pcm") {
-            let _ = std::fs::remove_file(e.path());
+        if !(name.starts_with("eq-") && name.ends_with(".pcm")) {
+            continue;
         }
+        // 名字尾巴是 pid（eq-<pid>.pcm / eq-scan-<pid>.pcm）：还活着的进程正在用，
+        // 别把别人的 FIFO 删了——之前这里一视同仁地删，结果测速解码器的管道
+        // 刚建好就被波形解码器扫掉，mpv 写不进去、30 秒后判超时。
+        let live = name
+            .trim_end_matches(".pcm")
+            .rsplit('-')
+            .next()
+            .and_then(|p| p.parse::<u32>().ok())
+            .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
+            .unwrap_or(false);
+        if live {
+            continue;
+        }
+        let _ = std::fs::remove_file(e.path());
     }
 }
 
@@ -243,10 +257,6 @@ struct WaveBuf {
     seq: u64,
 }
 
-/// 自动增益：把这首歌的 p90 窗峰值映射到 8/9 点（留 1 点余量防削顶）
-const AUTO_TARGET_FRAC: f32 = 8.0 / 9.0;
-/// 扫描没回来前的中性基准（-12 dBFS），避免一开始就冲顶
-pub const NEUTRAL_REF_DB: f32 = -12.0;
 /// 从 ao=pcm 写出的 WAV 里读每窗峰值（16bit 单声道，8kHz）
 fn wav_window_peaks(bytes: &[u8], window: usize) -> Vec<f32> {
     // 跳过 RIFF 头：找 "data" 块
@@ -310,79 +320,21 @@ impl Default for WaveCfg {
     }
 }
 
-struct WaveAgc {
-    /// 自动增益（dB）：作用在「原始峰值 + gain」上，再用绝对刻度映射到 0..9
-    gain_db: f32,
-    /// 用户倍率（叠在归一化值上）
-    user_gain: f32,
-    soft_clip: bool,
-    autogain: bool,
-    /// 手动模式的天花板（dBFS）
-    ceiling_db: f32,
-    /// 全曲累计的窗峰值（dB）
-    peaks: Vec<f32>,
-    /// 距离上次重算的秒数
-    acc: f32,
-    /// 这首歌已经播了多少秒（置信度爬坡用）
-    played: f32,
-    /// 平滑后的 p90（dB）
-    p90_est: f32,
-    /// 缓存命中时不需要再估
-    frozen: bool,
-    /// 当前估计的 p90（dB），交给界面写缓存
-    done_p90: Arc<Mutex<Option<f32>>>,
-}
-
 /// 软限幅拐点：以下线性，以上 tanh
 const SOFT_KNEE: f32 = 0.75;
 /// 映射窗口（dB）：天花板往下 24 dB 是 0 档
 const SPAN_DB: f32 = 24.0;
 /// 自动增益的目标：整曲 p90 落在 6.5/9 档（留 2.5 档给歌内动态）
-const AUTO_TARGET_LEVEL: f32 = 6.0;
+const AUTO_TARGET_LEVEL: f32 = 6.5;
 /// 目标 p90 对应到「相对天花板的 dB」：p90 + gain 要落在 -6.67 dB
 /// （(x+24)/24 = 6.5/9 → x = -6.67）
 const AUTO_TARGET_POST_DB: f32 = -SPAN_DB + SPAN_DB * AUTO_TARGET_LEVEL / 9.0;
-/// p90 的精细段平滑速度：差距缩到 1 dB 以内后慢慢贴合，避免听感抖动
-const P90_SLEW_FINE_DB_PER_S: f32 = 0.3;
-/// p90 的纠正段速度：差得多时允许更快，否则整曲 p90 在副歌后抬起来，
-/// 增益要几十秒才降得下来，一首歌里波动十几 dB
-const P90_SLEW_FAST_DB_PER_S: f32 = 0.6;
-/// 差距超过这个值走纠正段速度
-const P90_FAST_GAP_DB: f32 = 3.0;
-/// 差距缩到这个值以内走精细段速度
-const P90_FINE_GAP_DB: f32 = 1.0;
-
-/// 按当前差距挑平滑速度：>3 dB 快（0.6），≤1 dB 慢（0.3），中间线性过渡
-fn p90_slew_rate(gap: f32) -> f32 {
-    let g = gap.abs();
-    if g >= P90_FAST_GAP_DB {
-        P90_SLEW_FAST_DB_PER_S
-    } else if g <= P90_FINE_GAP_DB {
-        P90_SLEW_FINE_DB_PER_S
-    } else {
-        let t = (g - P90_FINE_GAP_DB) / (P90_FAST_GAP_DB - P90_FINE_GAP_DB);
-        P90_SLEW_FINE_DB_PER_S + (P90_SLEW_FAST_DB_PER_S - P90_SLEW_FINE_DB_PER_S) * t
-    }
-}
-/// 增益的置信度爬坡：前 15 秒最多 ±2 dB，15–45 秒 ±4 dB，之后放开到硬钳位
-fn gain_limits(played: f32) -> (f32, f32) {
-    if played < 15.0 {
-        (-2.0, 2.0)
-    } else if played < 45.0 {
-        (-4.0, 4.0)
-    } else {
-        (GAIN_MIN_DB, GAIN_MAX_DB)
-    }
-}
-
 /// 增益硬钳位：热母带要能压下去（-12），冷母带 +6 够用
 const GAIN_MIN_DB: f32 = -12.0;
 const GAIN_MAX_DB: f32 = 6.0;
 
-/// 攒够 1 秒才开始估
-const EST_MIN_WINDOWS: usize = 31;
-/// 全曲累计上限（约 10 分钟，防长播内存涨）
-const EST_MAX_WINDOWS: usize = 20000;
+/// 测速解码出结果后，用多少秒斜坡过渡到目标增益
+const RAMP_SECS: f32 = 4.0;
 
 /// 手动模式的基准下漂速度（dB/秒）
 const WAVE_REF_DECAY_DB_PER_S: f32 = 0.1;
@@ -393,79 +345,67 @@ const WAVE_REF_CAP_DB: f32 = -3.0;
 /// 默认天花板（可被 [ui] eq_reference_dbfs 覆盖）
 const WAVE_REF_INIT_DB: f32 = -6.0;
 
-fn approach(cur: f32, target: f32, step: f32) -> f32 {
-    if cur < target {
-        (cur + step).min(target)
-    } else {
-        (cur - step).max(target)
-    }
+/// 整曲 p90 → 自动增益（dB）。钳位在这里统一做，界面、波形、缓存都用同一份
+pub fn autogain_from_p90(p90_db: f32) -> f32 {
+    (AUTO_TARGET_POST_DB - p90_db).clamp(GAIN_MIN_DB, GAIN_MAX_DB)
+}
+
+/// 波形幅度与自动增益。
+///
+/// 增益**不在歌内估**：切歌时另起一个「测速解码器」把整曲 p90 算出来（见 [`LoudScan`]），
+/// 算完之前用固定增益（`eq_gain` 那套映射），算完用 4 秒斜坡过渡过去，之后整首不动。
+/// 这样「一首歌里别晃」和「副歌一到就到位」不再冲突——代价是每首歌第一次听时，
+/// 中途会有一次可见的升降。
+struct WaveAgc {
+    /// 目标自动增益（dB）：测速解码/缓存给的；None = 还没算出来，用固定增益
+    target_db: Option<f32>,
+    /// 斜坡起点：`(歌曲内已播秒数, 起点 dB)`
+    ramp_at: Option<(f32, f32)>,
+    /// 用户倍率（固定增益那套映射的放大倍数）
+    user_gain: f32,
+    soft_clip: bool,
+    autogain: bool,
+    /// 手动模式的天花板（dBFS）
+    ceiling_db: f32,
+    /// 这首歌已经播了多少秒
+    played: f32,
 }
 
 impl WaveAgc {
-    /// `p90_db`：缓存里这首歌的响度代表；None = 第一次听，边放边估
-    fn new(cfg: WaveCfg, p90_db: Option<f32>, done_p90: Arc<Mutex<Option<f32>>>) -> Self {
-        let cached = p90_db.filter(|p| p.is_finite());
+    /// `target_db`：缓存命中就直接给目标增益（第一秒就到位）；None = 首次播放，等测速
+    fn new(cfg: WaveCfg, target_db: Option<f32>) -> Self {
         let ceiling = if cfg.reference_dbfs.is_finite() {
             cfg.reference_dbfs.clamp(-60.0, -3.0)
         } else {
             WAVE_REF_INIT_DB
         };
         WaveAgc {
-            gain_db: cached
-                .map(|p| (AUTO_TARGET_POST_DB - p).clamp(GAIN_MIN_DB, GAIN_MAX_DB))
-                .unwrap_or(0.0),
+            target_db: target_db.filter(|g| g.is_finite()),
+            ramp_at: None,
             user_gain: cfg.gain.clamp(0.1, 8.0),
             soft_clip: cfg.soft_clip,
             autogain: cfg.autogain,
-            ceiling_db: if cfg.autogain { 0.0 } else { ceiling },
-            peaks: Vec::with_capacity(2048),
-            acc: 0.0,
+            ceiling_db: ceiling,
             played: 0.0,
-            p90_est: cached.unwrap_or(NEUTRAL_REF_DB),
-            frozen: cached.is_some(),
-            done_p90,
         }
     }
 
-    /// 自动模式：**整曲累计**的窗峰值取 p90，双速率对称平滑。
-    ///
-    /// 之前是「只往更响方向更新 + 15 秒滑动窗」，等于 p90 取历史最大值：
-    /// 一首歌里只要响过一次，增益就再也回不来，于是晴天一路爬了 145 秒。
-    /// 改成全曲累计 + 对称平滑后，晴天副歌 127 秒才来、p90 那时才抬起来，
-    /// 0.3 dB/s 回落太慢，145 秒还没收敛完（一首里波动十几 dB）。
-    /// 现在按差距挑速度：差 >3 dB 走 0.6 dB/s，≤1 dB 回 0.3 dB/s 精修。
-    fn observe(&mut self, peak_db: f32, dt_s: f32) {
-        if self.autogain {
-            if self.frozen {
-                return;
-            }
-            if self.peaks.len() < EST_MAX_WINDOWS {
-                self.peaks.push(peak_db);
-            }
-            self.played += dt_s;
-            self.acc += dt_s;
-            if self.peaks.len() < EST_MIN_WINDOWS {
-                return;
-            }
-            let elapsed = self.acc;
-            if elapsed < 1.0 {
-                return;
-            }
-            self.acc = 0.0;
-            let mut v = self.peaks.clone();
-            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let idx = ((v.len() as f32 * 0.9) as usize).min(v.len() - 1);
-            let p90 = v[idx];
-            // 双速率限速：差得多时 0.6 dB/s 纠正，贴合后 0.3 dB/s 精修
-            let slew = p90_slew_rate(p90 - self.p90_est) * elapsed;
-            self.p90_est = approach(self.p90_est, p90, slew);
-            // 置信度爬坡 + 硬钳位：早期样本少就别拿 10 秒的估计去推整首
-            let (lo, hi) = gain_limits(self.played);
-            self.gain_db = (AUTO_TARGET_POST_DB - self.p90_est).clamp(lo, hi);
-            *self.done_p90.lock().unwrap() = Some(self.p90_est);
+    /// 测速解码回来：从当前增益起，用 4 秒斜坡走到目标（只发生一次）
+    fn set_target(&mut self, gain_db: f32) {
+        if !self.autogain || self.target_db.is_some() {
             return;
         }
-        // 手动模式：天花板跟着峰值慢漂
+        let from = self.fixed_equiv_db();
+        self.target_db = Some(gain_db.clamp(GAIN_MIN_DB, GAIN_MAX_DB));
+        self.ramp_at = Some((self.played, from));
+    }
+
+    fn observe(&mut self, peak_db: f32, dt_s: f32) {
+        self.played += dt_s;
+        if self.autogain {
+            return;
+        }
+        // 固定增益：天花板跟着峰值慢漂
         if peak_db > self.ceiling_db {
             self.ceiling_db = peak_db.min(WAVE_REF_CAP_DB);
         } else {
@@ -474,42 +414,77 @@ impl WaveAgc {
         }
     }
 
-    /// 自动增益给这首歌加了多少 dB
+    /// 固定增益那套映射折合成 dB（和自动增益同一把尺子，只为显示/记录）
+    fn fixed_equiv_db(&self) -> f32 {
+        -self.ceiling_db + 20.0 * self.user_gain.max(1e-6).log10()
+    }
+
+    /// 0 = 固定增益映射，1 = 自动增益映射
+    fn blend(&self) -> f32 {
+        match (self.target_db, self.ramp_at) {
+            (None, _) => 0.0,
+            (Some(_), None) => 1.0,
+            (Some(_), Some((at, _))) => ((self.played - at) / RAMP_SECS).clamp(0.0, 1.0),
+        }
+    }
+
+    /// 当前生效的自动增益（dB）：固定阶段报等价 dB，斜坡内线性插值
+    fn effective_gain_db(&self) -> f32 {
+        match (self.target_db, self.ramp_at) {
+            (None, _) => {
+                if self.autogain { self.fixed_equiv_db() } else { 0.0 }
+            }
+            (Some(t), None) => t,
+            (Some(t), Some((at, from))) => {
+                let b = ((self.played - at) / RAMP_SECS).clamp(0.0, 1.0);
+                from + (t - from) * b
+            }
+        }
+    }
+
+    /// 自动增益给这首歌加了多少 dB（固定增益阶段报 0，别闪一个假的数）
     fn auto_gain_db(&self) -> f32 {
-        if self.autogain {
-            self.gain_db
-        } else {
-            0.0
+        if !self.autogain {
+            return 0.0;
+        }
+        match self.target_db {
+            None => 0.0,
+            Some(_) => self.effective_gain_db(),
         }
     }
 
-    /// 当前 p90 估计（还没估出来时用增益反推，永远有值）
+    /// 当前 p90（dB）：已经知道目标就反推，不知道就按固定映射折合
     fn p90_db(&self) -> f32 {
-        if self.autogain {
-            AUTO_TARGET_POST_DB - self.gain_db
-        } else {
-            self.p90_est
-        }
+        AUTO_TARGET_POST_DB - self.effective_gain_db()
     }
 
-    /// 是否已经算出真正的标定（刚重启时是中性状态）
+    /// 是否已经拿到整曲标定
     fn calibrated(&self) -> bool {
-        self.autogain && self.p90_est != NEUTRAL_REF_DB
+        self.autogain && self.target_db.is_some()
     }
 
-    /// 峰值（线性）在增益后的 dBFS
-    fn post_db(&self, peak: f32) -> f32 {
-        20.0 * peak.max(1e-9).log10() + self.auto_gain_db()
+    fn peak_db(peak: f32) -> f32 {
+        20.0 * peak.max(1e-9).log10()
     }
 
-    /// 归一化前的倍数（1.0 = 正好顶到天花板）：平顶标志与断言都用它
-    fn norm_pre(&self, peak: f32) -> f32 {
-        10f32.powf((self.post_db(peak) - self.ceiling_db) / 20.0)
+    /// 归一化前的幅度（1.0 = 顶到天花板，可大于 1）。平顶标志用它。
+    fn x_pre(&self, peak: f32) -> f32 {
+        let p = Self::peak_db(peak);
+        let man = ((p - self.ceiling_db + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0) * self.user_gain;
+        if !self.autogain {
+            return man;
+        }
+        let b = self.blend();
+        if b <= 0.0 {
+            return man;
+        }
+        let g = self.effective_gain_db();
+        let auto = ((p + g + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0);
+        man * (1.0 - b) + auto * b
     }
 
     fn amp(&self, peak: f32) -> f32 {
-        let post = self.post_db(peak);
-        let x = ((post - self.ceiling_db + SPAN_DB) / SPAN_DB).clamp(0.0, 1.0) * self.user_gain;
+        let x = self.x_pre(peak);
         if self.soft_clip && x > SOFT_KNEE {
             // 超出拐点用 tanh 挤向 1：响处不硬切成一条线
             let t = ((x - SOFT_KNEE) / (1.0 - SOFT_KNEE)).tanh();
@@ -517,6 +492,135 @@ impl WaveAgc {
         } else {
             x.clamp(0.0, 1.0)
         }
+    }
+}
+
+/// 「测速解码器」：另起一个 mpv 把整首快速解一遍，只为算出**整曲 p90**。
+///
+/// 不参与播放、不参与波形；`--speed=8` 封顶，尽量 30 秒内跑完。
+/// 这一路会**多下载一次音频**（约等于整首文件大小），界面上要如实显示进度，
+/// 不能偷偷花用户流量。
+pub struct LoudScan {
+    child: Child,
+    fifo: PathBuf,
+    stop: Arc<Mutex<bool>>,
+    state: Arc<Mutex<ScanState>>,
+    started: std::time::Instant,
+    url: String,
+}
+
+#[derive(Default, Clone, Copy)]
+struct ScanState {
+    /// 已经解出来的秒数（进度用）
+    secs: f64,
+    /// 算完了就是整曲 p90（dBFS）
+    p90: Option<f32>,
+}
+
+/// 90 分位（和 WaveAgc 里的口径完全一致）
+fn p90_of(mut v: Vec<f32>) -> Option<f32> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((v.len() as f32 * 0.9) as usize).min(v.len() - 1);
+    Some(v[idx])
+}
+
+impl LoudScan {
+    pub fn start(url: &str) -> Option<LoudScan> {
+        let dir = eq_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        sweep_stale(&dir);
+        let fifo = dir.join(format!("eq-scan-{}.pcm", std::process::id()));
+        let _ = std::fs::remove_file(&fifo);
+        if !Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return None;
+        }
+        // --speed=8：封顶 8 倍速，别为了算个响度把带宽吃满
+        let child = Command::new("mpv")
+            .args([
+                "--no-video",
+                "--no-terminal",
+                "--really-quiet",
+                "--ao=pcm",
+                &format!("--ao-pcm-file={}", fifo.display()),
+                "--audio-format=s16",
+                &format!("--audio-samplerate={}", SAMPLE_RATE as u32),
+                "--audio-channels=mono",
+                "--speed=8",
+                url,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+
+        let state = Arc::new(Mutex::new(ScanState::default()));
+        let stop = Arc::new(Mutex::new(false));
+        let path = fifo.clone();
+        let st = state.clone();
+        let stop_thread = stop.clone();
+        std::thread::spawn(move || {
+            let Ok(mut f) = std::fs::File::open(&path) else {
+                return;
+            };
+            let _ = std::fs::remove_file(&path);
+            let mut buf = vec![0u8; WINDOW * 2];
+            let mut peaks: Vec<f32> = Vec::with_capacity(16384);
+            while !*stop_thread.lock().unwrap() {
+                if f.read_exact(&mut buf).is_err() {
+                    break;
+                }
+                let mut peak = 0.0f32;
+                for c in buf.as_chunks::<2>().0.iter().take(WINDOW) {
+                    let v = i16::from_le_bytes(*c) as f32 / 32768.0;
+                    peak = peak.max(v.abs());
+                }
+                peaks.push(20.0 * peak.max(1e-9).log10());
+                let mut s = st.lock().unwrap();
+                s.secs = peaks.len() as f64 * WINDOW as f64 / SAMPLE_RATE;
+            }
+            let p90 = p90_of(peaks);
+            st.lock().unwrap().p90 = p90;
+        });
+        Some(LoudScan {
+            child,
+            fifo,
+            stop,
+            state,
+            started: std::time::Instant::now(),
+            url: url.to_string(),
+        })
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+    pub fn secs(&self) -> f64 {
+        self.state.lock().unwrap().secs
+    }
+    /// 算完了就是整曲 p90，没算完是 None
+    pub fn result(&self) -> Option<f32> {
+        self.state.lock().unwrap().p90
+    }
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.started.elapsed()
+    }
+}
+
+impl Drop for LoudScan {
+    fn drop(&mut self) {
+        *self.stop.lock().unwrap() = true;
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.fifo);
     }
 }
 
@@ -530,22 +634,23 @@ pub struct PcmAnalyzer {
     wave: Arc<Mutex<WaveBuf>>,
     /// 解码用的流地址（换歌要重建，不然波形还在画上一首）
     url: String,
-    /// 当前自动增益（dB，相对中性基准），给界面显示
+    /// 当前自动增益（dB），给界面显示
     auto_gain_db: Arc<Mutex<f32>>,
-    /// 边放边估出来的 p90（收敛后才有值），界面据此写缓存
-    est_p90: Arc<Mutex<Option<f32>>>,
+    /// 目标增益（dB）：测速解码回来由界面填进来，4 秒斜坡过渡
+    target: Arc<Mutex<Option<f32>>>,
     /// 读线程用的结束旗标（Drop 时置位，避免线程卡在阻塞读上）
     stop: Arc<Mutex<bool>>,
 }
 
 impl PcmAnalyzer {
     /// 起解码进程。`start_secs` 用来和播放器对齐（从当前播放位置开始解）。
-    /// `p90_db`：这首歌的响度代表（App 层扫好传进来，拖动重开时传同一个值）
+    /// `target_db`：这首歌的目标自动增益（缓存命中时有值，第一秒就到位）；
+    /// None = 首次播放，固定增益起步，等 [`LoudScan`] 算完再由界面灌进来。
     pub fn start(
         url: &str,
         start_secs: f64,
         wave_cfg: WaveCfg,
-        p90_db: Option<f32>,
+        target_db: Option<f32>,
         seg_no: usize,
     ) -> Option<PcmAnalyzer> {
         let dir = eq_dir();
@@ -583,13 +688,13 @@ impl PcmAnalyzer {
 
         let wave = Arc::new(Mutex::new(WaveBuf::default()));
         let auto_gain_db = Arc::new(Mutex::new(0.0f32));
-        let est_p90: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
+        let target: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(target_db));
         // 段号由界面给：同一首歌内从 1 开始，重启一次 +1（换歌重新从 1 数）
         let stop = Arc::new(Mutex::new(false));
         {
             let wave = wave.clone();
             let auto_gain_cell = auto_gain_db.clone();
-            let est_cell = est_p90.clone();
+            let target_cell = target.clone();
             let stop = stop.clone();
             let path = fifo.clone();
             std::thread::spawn(move || {
@@ -599,7 +704,7 @@ impl PcmAnalyzer {
                 // 已拿到 fd：立刻 unlink，靠 fd 继续读写。进程被强杀也不会留残留。
                 let _ = std::fs::remove_file(&path);
                 let mut buf = vec![0u8; WINDOW * 2];
-                let mut wagc = WaveAgc::new(wave_cfg, p90_db, est_cell.clone());
+                let mut wagc = WaveAgc::new(wave_cfg, target_db);
                 let gain_cell = auto_gain_cell.clone();
                 // 调试用：把每窗幅度写成 CSV（ms,amp,rms_db），默认不写
                 let mut dump = std::env::var("ZMUSIC_WAVE_DUMP").ok().and_then(|p| {
@@ -632,6 +737,10 @@ impl PcmAnalyzer {
                         .iter()
                         .map(|x| (*x as f32 / 32768.0).abs())
                         .fold(0.0f32, f32::max);
+                    // 界面测速回来会把目标灌进这个单元：读到就起一次 4 秒斜坡
+                    if let Some(g) = *target_cell.lock().unwrap() {
+                        wagc.set_target(g);
+                    }
                     wagc.observe(
                         20.0 * peak.max(1e-9).log10(),
                         WINDOW as f32 / SAMPLE_RATE as f32,
@@ -640,10 +749,9 @@ impl PcmAnalyzer {
                         use std::io::Write;
                         // 列：1 秒 2 原始dB 3 level(0..9) 4 自动增益dB 5 p90dB 6 段号 7 平顶
                         let level = wagc.amp(peak) * 9.0;
-                        let p90 = est_cell.lock().unwrap().unwrap_or_else(|| wagc.p90_db());
-                        // 平顶 = 归一化前的倍数 ≥0.995（顶到/超过天花板），
-                        // 和 level 用同一个 post-gain 口径，不再和绝对 dBFS 混用
-                        let flat = if wagc.norm_pre(peak) >= 0.995 {
+                        let p90 = wagc.p90_db();
+                        // 平顶 = 归一化前已经到/超天花板（1.0 = 正好顶到）
+                        let flat = if wagc.x_pre(peak) >= 0.995 {
                             1
                         } else {
                             0
@@ -688,9 +796,14 @@ impl PcmAnalyzer {
             wave,
             url: url.to_string(),
             auto_gain_db,
-            est_p90,
+            target,
             stop,
         })
+    }
+
+    /// 测速解码算出目标增益后灌进来：解码线程下一窗就会起 4 秒斜坡
+    pub fn set_target(&self, gain_db: f32) {
+        *self.target.lock().unwrap() = Some(gain_db);
     }
 
     /// 这个解码器用的流地址
@@ -703,24 +816,9 @@ impl PcmAnalyzer {
         *self.auto_gain_db.lock().unwrap()
     }
 
-    /// 这首歌估出来的 p90（dB，收敛后才有）：界面拿去缓存，下次直接命中
-    pub fn estimated_p90(&self) -> Option<f32> {
-        *self.est_p90.lock().unwrap()
-    }
-
-    /// 是否已算出真正的标定（刚起解码器时还是中性基准）
+    /// 是否已经拿到整曲标定（缓存命中或测速跑完）
     pub fn calibrated(&self) -> bool {
-        self.auto_gain_db().abs() > 0.05
-    }
-
-    /// 当前满高基准（dBFS）：p90 反推出来，拖动重开时沿用
-    pub fn ref_db(&self) -> f32 {
-        self.auto_gain_db() + NEUTRAL_REF_DB
-    }
-
-    /// 当前 p90 估计（dBFS）
-    pub fn p90_db(&self) -> f32 {
-        self.est_p90.lock().unwrap().unwrap_or(0.0)
+        self.target.lock().unwrap().is_some()
     }
 
     /// 最近 `max` 个波形样本 + 单调序号（界面据此只取新增的部分）
@@ -797,141 +895,114 @@ mod tests {
     #[test]
     fn autogain_maps_p90_to_target_level() {
         let db = |x: f32| 10f32.powf(x / 20.0);
-        // 软限幅（默认）：p90 落在 8/9 附近，更响的被压到接近但不越过 1
         let cfg = WaveCfg {
             autogain: true,
             soft_clip: true,
             gain: 1.0,
             reference_dbfs: -6.0,
         };
-        let cell = Arc::new(Mutex::new(None));
-        // 缓存 p90=-14 → 需要的增益正好 +6（钳位边界内），p90 应落在 6/9
-        let agc = WaveAgc::new(cfg, Some(-14.0), cell.clone());
-        let amp = agc.amp(db(-14.0));
-        assert!((amp * 9.0 - 6.0).abs() < 0.1, "p90 应落在 6/9: {amp}");
+        // p90 = -12 → 增益 +5.33（在钳位内），p90 该落在 6.5/9
+        let g = autogain_from_p90(-12.0);
+        let agc = WaveAgc::new(cfg, Some(g));
+        let amp = agc.amp(db(-12.0));
+        assert!((amp * 9.0 - 6.5).abs() < 0.1, "p90 应落在 6.5/9: {amp}");
         assert!(agc.amp(1.0) <= 1.0);
         assert!(agc.amp(db(-50.0)) < 0.15, "安静段要接近 0");
 
-        // 硬切：p90 精确落在 8/9
+        // 硬切也是同一档
         let hard = WaveAgc::new(
             WaveCfg {
                 soft_clip: false,
                 ..cfg
             },
-            Some(-14.0),
-            cell,
+            Some(g),
         );
-        assert!((hard.amp(db(-14.0)) * 9.0 - 6.0).abs() < 0.05);
-        // 更响的削到 1，不会超过
+        assert!((hard.amp(db(-12.0)) * 9.0 - 6.5).abs() < 0.05);
         assert_eq!(hard.amp(1.0), 1.0);
     }
 
     #[test]
-    fn autogain_is_symmetric_not_a_ratchet() {
+    fn autogain_is_clamped_to_the_range() {
+        // 极热母带（p90 0 dBFS）→ 要压到 -6.67，钳在 -12
+        assert!((autogain_from_p90(0.0) + 6.6667).abs() < 0.001);
+        assert_eq!(autogain_from_p90(10.0), GAIN_MIN_DB);
+        // 极轻的歌 → 钳在 +6
+        assert_eq!(autogain_from_p90(-40.0), GAIN_MAX_DB);
+        assert!((autogain_from_p90(-8.0) - 1.3333).abs() < 0.001);
+    }
+
+    /// 目标来得晚：4 秒斜坡过渡一次，之后整首不动（这是新方案的核心）
+    #[test]
+    fn autogain_ramps_once_then_holds() {
         let cfg = WaveCfg {
             autogain: true,
             soft_clip: true,
             gain: 1.0,
             reference_dbfs: -6.0,
         };
-        let cell = Arc::new(Mutex::new(None));
-        let mut agc = WaveAgc::new(cfg, None, cell.clone());
-        // 响段：p90 上抬 → 增益变小（波形压低）
-        for _ in 0..620 {
+        let mut agc = WaveAgc::new(cfg, None);
+        // 固定增益阶段：还没目标，自动增益报 0，波形按 eq_gain 那套画
+        for _ in 0..300 {
             agc.observe(-10.0, 0.032);
         }
-        let loud = agc.auto_gain_db();
-        // 之后一大段安静（占多数）：整曲累计的 p90 会被拉下来，增益随之回升，
-        // 证明它不再是「只升不降」的棘轮
-        for _ in 0..7000 {
-            agc.observe(-35.0, 0.032);
+        assert_eq!(agc.auto_gain_db(), 0.0);
+        assert!(!agc.calibrated());
+
+        // 测速回来：从固定增益折合值斜坡到 +2.0
+        let from = agc.fixed_equiv_db();
+        let before = agc.amp(0.1);
+        agc.set_target(2.0);
+        assert!(agc.calibrated());
+        // 斜坡刚开始：几乎还是固定增益那套
+        assert!((agc.amp(0.1) - before).abs() < 0.02, "斜坡起点不该跳");
+        assert!((agc.auto_gain_db() - from).abs() < 0.5);
+
+        // 2 秒后走了一半左右
+        for _ in 0..63 {
+            agc.observe(-10.0, 0.032);
         }
-        let quiet = agc.auto_gain_db();
-        assert!(quiet > loud + 3.0, "安静段增益要能升回来: {loud} -> {quiet}");
+        let mid = agc.auto_gain_db();
+        assert!(mid < from && mid > 2.0, "斜坡中间应在 {from} 与 2.0 之间: {mid}");
+
+        // 4 秒后到位，之后一直不动
+        for _ in 0..200 {
+            agc.observe(-10.0, 0.032);
+        }
+        assert!((agc.auto_gain_db() - 2.0).abs() < 0.01);
+        for _ in 0..500 {
+            agc.observe(-30.0, 0.032);
+        }
+        assert!((agc.auto_gain_db() - 2.0).abs() < 0.01, "之后整首不该再变");
     }
 
     #[test]
-    fn flat_flag_matches_norm_and_level() {
-        let cfg = WaveCfg {
-            autogain: true,
-            soft_clip: true,
-            gain: 1.0,
-            reference_dbfs: -6.0,
-        };
-        let cell = Arc::new(Mutex::new(None));
-        let agc = WaveAgc::new(cfg, Some(-20.0), cell);
-        // 找到「刚好顶到天花板」的线性峰值：norm_pre ≈ 1
-        let dbv = |x: f32| 10f32.powf(x / 20.0);
-        let mut peak = dbv(-20.0);
-        for db in (-20..0).rev() {
-            if agc.norm_pre(dbv(db as f32)) >= 0.995 {
-                peak = dbv(db as f32);
-                break;
-            }
-        }
-        assert!(agc.norm_pre(peak) >= 0.995, "应能找到顶到天花板的窗");
-        // 自洽性：flat=1 时 post-gain 已经顶到天花板，level 也在高位
-        // （软限幅下 level 渐近 9、不会等于 9，所以这里判 ≥8）
-        assert!(agc.amp(peak) * 9.0 >= 8.0, "level {}", agc.amp(peak) * 9.0);
-        assert!(agc.norm_pre(peak) >= 0.995);
-        // Chief 要求的自洽性：flat=1 ⇒ post-gain 已经到 0 dBFS 附近
-        assert!(
-            agc.post_db(peak) >= -0.5,
-            "flat 窗的 post-gain 必须 ≥ -0.5 dBFS: {}",
-            agc.post_db(peak)
+    fn flat_flag_matches_level_and_post_gain() {
+        let g = autogain_from_p90(-20.0);
+        let agc = WaveAgc::new(
+            WaveCfg {
+                autogain: true,
+                soft_clip: true,
+                gain: 1.0,
+                reference_dbfs: -6.0,
+            },
+            Some(g),
         );
-        // 安静窗：两个量都要小
-        assert!(agc.norm_pre(dbv(-50.0)) < 0.05);
+        let dbv = |x: f32| 10f32.powf(x / 20.0);
+        // 刚好被标成平顶的峰：level 必须已经很高、post-gain 也已到 0 dBFS 附近
+        assert!(agc.x_pre(dbv(-20.0)) < 0.995, "p90 那档不该算平顶");
+        assert!(agc.x_pre(1.0) >= 0.995, "满刻度必须算平顶");
+        assert!(agc.amp(1.0) * 9.0 >= 8.0);
         assert!(agc.amp(dbv(-50.0)) * 9.0 < 0.5);
     }
 
     #[test]
-    fn autogain_ramps_confidence_and_clamps() {
-        assert_eq!(gain_limits(5.0), (-2.0, 2.0));
-        assert_eq!(gain_limits(30.0), (-4.0, 4.0));
-        assert_eq!(gain_limits(60.0), (-12.0, 6.0));
-
-        // 前 15 秒即使歌很轻，也不许把增益推到 +12
-        let cfg = WaveCfg {
-            autogain: true,
-            soft_clip: true,
-            gain: 1.0,
-            reference_dbfs: -6.0,
-        };
-        let cell = Arc::new(Mutex::new(None));
-        let mut agc = WaveAgc::new(cfg, None, cell);
-        for _ in 0..400 {
-            agc.observe(-45.0, 0.032);
-        }
-        assert!(agc.auto_gain_db() <= 2.01, "前 15 秒最多 +2: {}", agc.auto_gain_db());
-        // 45 秒后放开到硬钳位 [-12, +6]
-        for _ in 0..1200 {
-            agc.observe(-45.0, 0.032);
-        }
-        let g = agc.auto_gain_db();
-        assert!((-12.01..=6.01).contains(&g), "增益必须在 [-12, +6] 内: {g}");
-        // 极轻的歌：整曲 p90 约 -45，目标 -8，要不出来 +37 但被 +6 钳住
-        assert!(g <= 6.01, "{g}");
-    }
-
-    #[test]
-    fn p90_slew_is_fast_on_big_gap_and_fine_near_target() {
-        assert_eq!(p90_slew_rate(5.0), P90_SLEW_FAST_DB_PER_S);
-        assert_eq!(p90_slew_rate(-5.0), P90_SLEW_FAST_DB_PER_S);
-        assert_eq!(p90_slew_rate(0.4), P90_SLEW_FINE_DB_PER_S);
-        assert_eq!(p90_slew_rate(0.0), P90_SLEW_FINE_DB_PER_S);
-        // 中间线性过渡
-        let mid = p90_slew_rate(2.0);
-        assert!(mid > P90_SLEW_FINE_DB_PER_S && mid < P90_SLEW_FAST_DB_PER_S, "{mid}");
-
-        // 一次 12 dB 的跳变：纠正段能在 ~20 秒内走完，而不是 40 秒
-        let mut est = -12.0f32;
-        let mut t = 0.0f32;
-        while (est - 0.0).abs() > 0.05 && t < 60.0 {
-            est = approach(est, 0.0, p90_slew_rate(0.0 - est) * 0.1);
-            t += 0.1;
-        }
-        assert!(t < 25.0, "12 dB 纠正在 {t} 秒完成");
+    fn p90_of_takes_the_90th_percentile() {
+        assert_eq!(p90_of(Vec::new()), None);
+        assert_eq!(p90_of(vec![-10.0]), Some(-10.0));
+        let v: Vec<f32> = (1..=100).map(|i| i as f32).collect();
+        let p = p90_of(v).unwrap();
+        // (100*0.9) as usize = 90 → 第 91 个值
+        assert_eq!(p, 91.0);
     }
 
     #[test]
