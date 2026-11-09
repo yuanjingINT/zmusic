@@ -443,6 +443,23 @@ impl WaveAgc {
         self.ref_db
     }
 
+    /// 当前基准反推出来的 p90（还没估出来之前也能写进 dump，不留哨兵值）
+    fn implied_p90(&self) -> f32 {
+        let k = if self.soft_clip {
+            SOFT_KNEE
+                + (1.0 - SOFT_KNEE)
+                    * ((AUTO_TARGET_FRAC - SOFT_KNEE) / (1.0 - SOFT_KNEE)).atanh()
+        } else {
+            AUTO_TARGET_FRAC
+        };
+        self.ref_db - 20.0 * (self.gain / k).log10()
+    }
+
+    /// 归一化前的原始倍数：≥1 表示这一列顶到/超过天花板（要算平顶率）
+    fn raw_x(&self, peak: f32) -> f32 {
+        (peak / 10f32.powf(self.ref_db / 20.0)) * self.gain
+    }
+
     /// 是否已经算出真正的标定（刚重启时是中性基准，别拿去显示）
     fn calibrated(&self) -> bool {
         (self.ref_db - NEUTRAL_REF_DB).abs() > 0.05
@@ -529,6 +546,9 @@ impl PcmAnalyzer {
         let wave = Arc::new(Mutex::new(WaveBuf::default()));
         let auto_gain_db = Arc::new(Mutex::new(0.0f32));
         let est_p90: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
+        // 解码器第几次运行（从 1 开始）：dump 出来就是「重启段数」
+        static SEG_NO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seg_no = SEG_NO.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let stop = Arc::new(Mutex::new(false));
         {
             let wave = wave.clone();
@@ -583,15 +603,23 @@ impl PcmAnalyzer {
                     );
                     if let Some(f) = dump.as_mut() {
                         use std::io::Write;
-                        let scan = scan_db_for_dump;
+                        // 列：1 秒 2 原始dB 3 level(0..9) 4 自动增益dB 5 p90dB 6 段号 7 平顶
+                        let level = wagc.amp(peak) * 9.0;
+                        let p90 = est_cell
+                            .lock()
+                            .unwrap()
+                            .unwrap_or_else(|| wagc.implied_p90());
+                        let flat = if wagc.raw_x(peak) >= 1.0 { 1 } else { 0 };
                         let _ = writeln!(
                             f,
-                            "{},{:.4},{:.2},{:.1},{:.1}",
-                            now,
-                            wagc.amp(peak),
+                            "{:.3},{:.2},{:.2},{:.1},{:.2},{},{}",
+                            now as f64 / 1000.0,
                             20.0 * peak.max(1e-9).log10(),
+                            level,
                             wagc.auto_gain_db(),
-                            scan.unwrap_or(-99.0)
+                            p90,
+                            seg_no,
+                            flat
                         );
                     }
                     *gain_cell.lock().unwrap() = wagc.auto_gain_db();

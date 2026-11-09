@@ -149,7 +149,7 @@ zmusic config --print  # 只打印路径
 | `ZMUSIC_METING_COOKIE` | 空 | 可选。Meting 换流用的平台 cookie（建议写 config.toml `[meting] cookie`），不落盘、不进日志 |
 | `ZMUSIC_YTDLP_BIN` | `yt-dlp` | yt-dlp 可执行文件名或绝对路径 |
 | `ZMUSIC_SUPERDL_DIR` | 空 | 设了就让**超级下载**直接写这个目录，跳过选盘/卸载/格式化（无 U 盘时测功能用） |
-| `ZMUSIC_WAVE_DUMP` | 空 | 调试用：把频谱每窗的 `毫秒,幅度,峰值dB` 追加写进这个文件（量标定用，平时别开） |
+| `ZMUSIC_WAVE_DUMP` | 空 | 调试用：把每个分析窗写成 CSV（列见 docs/CONFIG.md 第 5 节），平时别开 |
 
 运行时会写：
 
