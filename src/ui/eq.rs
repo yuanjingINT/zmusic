@@ -443,6 +443,11 @@ impl WaveAgc {
         self.ref_db
     }
 
+    /// 是否已经算出真正的标定（刚重启时是中性基准，别拿去显示）
+    fn calibrated(&self) -> bool {
+        (self.ref_db - NEUTRAL_REF_DB).abs() > 0.05
+    }
+
     fn amp(&self, peak: f32) -> f32 {
         // 线性映射：增益直接作用在幅度上（之前多叠一个 powf(0.9) 会把峰值压低半档）
         let x = (peak / 10f32.powf(self.ref_db / 20.0)) * self.gain;
@@ -637,6 +642,11 @@ impl PcmAnalyzer {
         *self.est_p90.lock().unwrap()
     }
 
+    /// 是否已算出真正的标定（刚起解码器时还是中性基准）
+    pub fn calibrated(&self) -> bool {
+        self.auto_gain_db().abs() > 0.05
+    }
+
     /// 当前满高基准（dBFS）：拖动重开解码器时沿用，不重新估
     pub fn ref_db(&self) -> f32 {
         self.auto_gain_db() + NEUTRAL_REF_DB
@@ -647,11 +657,6 @@ impl PcmAnalyzer {
         let w = self.wave.lock().unwrap();
         let n = w.samples.len().min(max);
         (w.samples[w.samples.len() - n..].to_vec(), w.seq)
-    }
-
-    /// 按已运行时长推算的当前解码位置（秒）：和播放位置差太多就是用户拖过
-    pub fn expected_pos(&self) -> f64 {
-        self.start + self.started.elapsed().as_secs_f64()
     }
 
     /// 解码进程是否还活着（死了要降级，不能一直读旧值）

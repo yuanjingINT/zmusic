@@ -215,6 +215,8 @@ pub struct App {
     wave: crate::ui::spectrum::WaveRing,
     /// 跳转后等播放位置稳定再重开解码器（否则会拿过期的位置去解码）
     eq_hold: Option<Instant>,
+    /// 上一拍的播放位置（拖动判定用）
+    eq_last_pos: Option<f64>,
     /// 这首歌已冻结的满高基准（给界面显示「自动 +X dB」）
     eq_auto_ref: Option<f32>,
     /// 逐曲响度缓存：歌曲 key → p90 dB（存 ~/.cache/zmusic/eq_gain.json）
@@ -369,6 +371,7 @@ impl App {
             eq_analyzer: None,
             wave: crate::ui::spectrum::WaveRing::new(),
             eq_hold: None,
+            eq_last_pos: None,
             eq_auto_ref: None,
             eq_cache: std::collections::HashMap::new(),
             eq_cache_loaded: false,
@@ -801,6 +804,21 @@ impl App {
     }
 
     fn sync_eq(&mut self, st: &crate::player::MpvState) {
+        // 拖动判定：只有播放位置在**两拍之间**跳变超过 2.5 秒才算用户拖动。
+        // 之前拿「解码器自报的 expected_pos」比，正常播放时解码器慢半拍就会被
+        // 当成拖动，导致解码器每 7–20 秒自杀重建一次（波形和标定跟着抖）。
+        if let Some(pos) = st.time_pos {
+            if let Some(prev) = self.eq_last_pos {
+                let back = pos < prev - 0.2; // 倒退就是 seek
+                let jump = (pos - prev) > 2.0; // 往前跳超过 2 秒也是
+                if back || jump {
+                    self.eq_analyzer = None;
+                    // mpv 的 time_pos 是异步更新的：等它稳定再从新位置重开
+                    self.eq_hold = Some(Instant::now() + Duration::from_millis(400));
+                }
+            }
+            self.eq_last_pos = Some(pos);
+        }
         let playing = self.now_playing.is_some() && !st.idle && !st.paused;
         let want = self.anim.equalizer_on()
             && self.anim.equalizer_source == crate::config::EqSource::Pcm
@@ -824,20 +842,13 @@ impl App {
                 }
             }
             if let Some(a) = self.eq_analyzer.as_ref() {
-                if self.anim.eq_autogain {
+                // 只有真的算出了标定才更新显示值；刚重启的解码器先停在 -12，
+                // 这时候别把「自动 +0.0 dB」闪给用户
+                if self.anim.eq_autogain && a.calibrated() {
                     self.eq_auto_ref = Some(a.ref_db());
                 }
             }
             self.absorb_eq_estimate();
-            // 和「解码器自己该到的位置」比，差 2 秒以上才算用户拖动过
-            if let (Some(pos), Some(a)) = (st.time_pos, self.eq_analyzer.as_ref()) {
-                if (pos - a.expected_pos()).abs() > 2.0 {
-                    self.eq_analyzer = None;
-                    // mpv 的 time_pos 是异步更新的：此刻读到的很可能还是拖动前的位置，
-                    // 等 400ms 让它稳定，再从新位置重开解码器，否则波形画的是旧段落
-                    self.eq_hold = Some(Instant::now() + Duration::from_millis(400));
-                }
-            }
             if self.eq_analyzer.is_some() {
                 return;
             }
