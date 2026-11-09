@@ -16,9 +16,9 @@ optdepends=('mpv: audio playback'
 # 发版时把 _commit 换成要发的那一版，并重算 sha256sums：
 #   curl -sSfL "$url/-/archive/$_commit/$pkgname-$_commit.tar.gz" | sha256sum
 # 之后公开了 tag，也可以换成 tag 归档：$_commit 的位置写 v$pkgver。
-_commit=ea35f09d2156636d3b2aa688a4dc5900750592c0
+_commit=94c872f1dde4c2cdd4144c3ffedcac0d666622d5
 source=("$pkgname-$_commit.tar.gz::$url/-/archive/$_commit/$pkgname-$_commit.tar.gz")
-sha256sums=('e05a3fa745eb6cf24274ec4a8e98a5ea90560de5af95428fad2bbf3b24ef8fba')
+sha256sums=('538ca91e5e17793ec5ed048a53b93b9d6bf8d521abc9a826f0f4ae3c72e98958')
 
 build() {
   cd "$srcdir/$pkgname-$_commit"
