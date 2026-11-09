@@ -342,8 +342,28 @@ const AUTO_TARGET_LEVEL: f32 = 6.0;
 /// 目标 p90 对应到「相对天花板的 dB」：p90 + gain 要落在 -6.67 dB
 /// （(x+24)/24 = 6.5/9 → x = -6.67）
 const AUTO_TARGET_POST_DB: f32 = -SPAN_DB + SPAN_DB * AUTO_TARGET_LEVEL / 9.0;
-/// p90 的平滑速度：对称 0.3 dB/s（上行下行一样，不再当棘轮）
-const P90_SLEW_DB_PER_S: f32 = 0.3;
+/// p90 的精细段平滑速度：差距缩到 1 dB 以内后慢慢贴合，避免听感抖动
+const P90_SLEW_FINE_DB_PER_S: f32 = 0.3;
+/// p90 的纠正段速度：差得多时允许更快，否则整曲 p90 在副歌后抬起来，
+/// 增益要几十秒才降得下来，一首歌里波动十几 dB
+const P90_SLEW_FAST_DB_PER_S: f32 = 0.6;
+/// 差距超过这个值走纠正段速度
+const P90_FAST_GAP_DB: f32 = 3.0;
+/// 差距缩到这个值以内走精细段速度
+const P90_FINE_GAP_DB: f32 = 1.0;
+
+/// 按当前差距挑平滑速度：>3 dB 快（0.6），≤1 dB 慢（0.3），中间线性过渡
+fn p90_slew_rate(gap: f32) -> f32 {
+    let g = gap.abs();
+    if g >= P90_FAST_GAP_DB {
+        P90_SLEW_FAST_DB_PER_S
+    } else if g <= P90_FINE_GAP_DB {
+        P90_SLEW_FINE_DB_PER_S
+    } else {
+        let t = (g - P90_FINE_GAP_DB) / (P90_FAST_GAP_DB - P90_FINE_GAP_DB);
+        P90_SLEW_FINE_DB_PER_S + (P90_SLEW_FAST_DB_PER_S - P90_SLEW_FINE_DB_PER_S) * t
+    }
+}
 /// 增益的置信度爬坡：前 15 秒最多 ±2 dB，15–45 秒 ±4 dB，之后放开到硬钳位
 fn gain_limits(played: f32) -> (f32, f32) {
     if played < 15.0 {
@@ -355,8 +375,8 @@ fn gain_limits(played: f32) -> (f32, f32) {
     }
 }
 
-/// 增益硬钳位：一首歌里最多推 ±6 dB，免得前几十秒把歌硬推 12 dB 再回落
-const GAIN_MIN_DB: f32 = -6.0;
+/// 增益硬钳位：热母带要能压下去（-12），冷母带 +6 够用
+const GAIN_MIN_DB: f32 = -12.0;
 const GAIN_MAX_DB: f32 = 6.0;
 
 /// 攒够 1 秒才开始估
@@ -407,12 +427,13 @@ impl WaveAgc {
         }
     }
 
-    /// 自动模式：**整曲累计**的窗峰值取 p90，对称 0.3 dB/s 平滑。
+    /// 自动模式：**整曲累计**的窗峰值取 p90，双速率对称平滑。
     ///
     /// 之前是「只往更响方向更新 + 15 秒滑动窗」，等于 p90 取历史最大值：
-    /// 一首歌里只要响过一次，增益就再也回不来，于是晴天一路爬了 145 秒
-    /// （gain -4.8 → +6.6，末段还在爬）。改成全曲累计 + 对称平滑，60 秒内收敛、
-    /// 之后只有 ±0.5 dB 的抖动。
+    /// 一首歌里只要响过一次，增益就再也回不来，于是晴天一路爬了 145 秒。
+    /// 改成全曲累计 + 对称平滑后，晴天副歌 127 秒才来、p90 那时才抬起来，
+    /// 0.3 dB/s 回落太慢，145 秒还没收敛完（一首里波动十几 dB）。
+    /// 现在按差距挑速度：差 >3 dB 走 0.6 dB/s，≤1 dB 回 0.3 dB/s 精修。
     fn observe(&mut self, peak_db: f32, dt_s: f32) {
         if self.autogain {
             if self.frozen {
@@ -435,8 +456,9 @@ impl WaveAgc {
             v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let idx = ((v.len() as f32 * 0.9) as usize).min(v.len() - 1);
             let p90 = v[idx];
-            // 对称限速：上行下行都是 0.3 dB/s，不再当棘轮
-            self.p90_est = approach(self.p90_est, p90, P90_SLEW_DB_PER_S * elapsed);
+            // 双速率限速：差得多时 0.6 dB/s 纠正，贴合后 0.3 dB/s 精修
+            let slew = p90_slew_rate(p90 - self.p90_est) * elapsed;
+            self.p90_est = approach(self.p90_est, p90, slew);
             // 置信度爬坡 + 硬钳位：早期样本少就别拿 10 秒的估计去推整首
             let (lo, hi) = gain_limits(self.played);
             self.gain_db = (AUTO_TARGET_POST_DB - self.p90_est).clamp(lo, hi);
@@ -867,7 +889,7 @@ mod tests {
     fn autogain_ramps_confidence_and_clamps() {
         assert_eq!(gain_limits(5.0), (-2.0, 2.0));
         assert_eq!(gain_limits(30.0), (-4.0, 4.0));
-        assert_eq!(gain_limits(60.0), (-6.0, 6.0));
+        assert_eq!(gain_limits(60.0), (-12.0, 6.0));
 
         // 前 15 秒即使歌很轻，也不许把增益推到 +12
         let cfg = WaveCfg {
@@ -882,12 +904,34 @@ mod tests {
             agc.observe(-45.0, 0.032);
         }
         assert!(agc.auto_gain_db() <= 2.01, "前 15 秒最多 +2: {}", agc.auto_gain_db());
-        // 45 秒后放开到 ±6
+        // 45 秒后放开到硬钳位 [-12, +6]
         for _ in 0..1200 {
             agc.observe(-45.0, 0.032);
         }
         let g = agc.auto_gain_db();
-        assert!((-6.01..=6.01).contains(&g), "增益必须在 ±6 内: {g}");
+        assert!((-12.01..=6.01).contains(&g), "增益必须在 [-12, +6] 内: {g}");
+        // 极轻的歌：整曲 p90 约 -45，目标 -8，要不出来 +37 但被 +6 钳住
+        assert!(g <= 6.01, "{g}");
+    }
+
+    #[test]
+    fn p90_slew_is_fast_on_big_gap_and_fine_near_target() {
+        assert_eq!(p90_slew_rate(5.0), P90_SLEW_FAST_DB_PER_S);
+        assert_eq!(p90_slew_rate(-5.0), P90_SLEW_FAST_DB_PER_S);
+        assert_eq!(p90_slew_rate(0.4), P90_SLEW_FINE_DB_PER_S);
+        assert_eq!(p90_slew_rate(0.0), P90_SLEW_FINE_DB_PER_S);
+        // 中间线性过渡
+        let mid = p90_slew_rate(2.0);
+        assert!(mid > P90_SLEW_FINE_DB_PER_S && mid < P90_SLEW_FAST_DB_PER_S, "{mid}");
+
+        // 一次 12 dB 的跳变：纠正段能在 ~20 秒内走完，而不是 40 秒
+        let mut est = -12.0f32;
+        let mut t = 0.0f32;
+        while (est - 0.0).abs() > 0.05 && t < 60.0 {
+            est = approach(est, 0.0, p90_slew_rate(0.0 - est) * 0.1);
+            t += 0.1;
+        }
+        assert!(t < 25.0, "12 dB 纠正在 {t} 秒完成");
     }
 
     #[test]

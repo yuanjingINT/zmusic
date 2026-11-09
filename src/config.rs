@@ -53,10 +53,11 @@ equalizer_source = "pcm"
 eq_agc = true
 # 波形满高对应的 dBFS（越小越容易顶满；默认 -6）
 eq_reference_dbfs = -6.0
-# 逐曲自动增益：切歌时先扫一遍整首的响度，自动定标（默认开）
-eq_autogain = true
-# 手动倍率：叠在自动增益之上（1.0 = 不额外放大；自动增益关掉时才当主增益用）
-eq_gain = 1.0
+# 逐曲自动增益（实验特性，默认关）：复用波形那条解码流边播边估整曲响度，自动定标
+# 首次播放要 30-60 秒才收敛；同一首第二次播从第一秒就准（按曲目 id 缓存）
+eq_autogain = false
+# 手动倍率：自动增益关掉时它说了算（1.6 = 之前定下的默认观感）；自动增益开着时是叠在它上面的倍率（中性写 1.0）
+eq_gain = 1.6
 # 软限幅（tanh）：响的地方挤向顶部但不硬切，平顶更少
 eq_soft_clip = true
 
@@ -147,8 +148,8 @@ impl Default for Animations {
             equalizer_source: EqSource::Pcm,
             eq_agc: true,
             eq_reference_dbfs: -6.0,
-            eq_autogain: true,
-            eq_gain: 1.0,
+            eq_autogain: false,
+            eq_gain: 1.6,
             eq_soft_clip: true,
         }
     }
@@ -348,8 +349,8 @@ impl Config {
                     parsed.ui.eq_reference_dbfs,
                     -6.0,
                 ),
-                eq_autogain: pick_bool(env, "ZMUSIC_EQ_AUTOGAIN", parsed.ui.eq_autogain, true),
-                eq_gain: pick_f32(env, "ZMUSIC_EQ_GAIN", parsed.ui.eq_gain, 1.0),
+                eq_autogain: pick_bool(env, "ZMUSIC_EQ_AUTOGAIN", parsed.ui.eq_autogain, false),
+                eq_gain: pick_f32(env, "ZMUSIC_EQ_GAIN", parsed.ui.eq_gain, 1.6),
                 eq_soft_clip: pick_bool(env, "ZMUSIC_EQ_SOFT_CLIP", parsed.ui.eq_soft_clip, true),
                 equalizer_source: match pick("ZMUSIC_EQ_SOURCE", parsed.ui.equalizer_source, "pcm")
                     .as_str()
