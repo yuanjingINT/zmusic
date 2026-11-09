@@ -323,6 +323,8 @@ struct WaveAgc {
     peaks: Vec<f32>,
     /// 距离上次重算的秒数
     acc: f32,
+    /// 这首歌已经播了多少秒（置信度爬坡用）
+    played: f32,
     /// 平滑后的 p90（dB）
     p90_est: f32,
     /// 缓存命中时不需要再估
@@ -336,12 +338,27 @@ const SOFT_KNEE: f32 = 0.75;
 /// 映射窗口（dB）：天花板往下 24 dB 是 0 档
 const SPAN_DB: f32 = 24.0;
 /// 自动增益的目标：整曲 p90 落在 6.5/9 档（留 2.5 档给歌内动态）
-const AUTO_TARGET_LEVEL: f32 = 6.5;
+const AUTO_TARGET_LEVEL: f32 = 6.0;
 /// 目标 p90 对应到「相对天花板的 dB」：p90 + gain 要落在 -6.67 dB
 /// （(x+24)/24 = 6.5/9 → x = -6.67）
 const AUTO_TARGET_POST_DB: f32 = -SPAN_DB + SPAN_DB * AUTO_TARGET_LEVEL / 9.0;
 /// p90 的平滑速度：对称 0.3 dB/s（上行下行一样，不再当棘轮）
 const P90_SLEW_DB_PER_S: f32 = 0.3;
+/// 增益的置信度爬坡：前 15 秒最多 ±2 dB，15–45 秒 ±4 dB，之后放开到硬钳位
+fn gain_limits(played: f32) -> (f32, f32) {
+    if played < 15.0 {
+        (-2.0, 2.0)
+    } else if played < 45.0 {
+        (-4.0, 4.0)
+    } else {
+        (GAIN_MIN_DB, GAIN_MAX_DB)
+    }
+}
+
+/// 增益硬钳位：一首歌里最多推 ±6 dB，免得前几十秒把歌硬推 12 dB 再回落
+const GAIN_MIN_DB: f32 = -6.0;
+const GAIN_MAX_DB: f32 = 6.0;
+
 /// 攒够 1 秒才开始估
 const EST_MIN_WINDOWS: usize = 31;
 /// 全曲累计上限（约 10 分钟，防长播内存涨）
@@ -374,13 +391,16 @@ impl WaveAgc {
             WAVE_REF_INIT_DB
         };
         WaveAgc {
-            gain_db: cached.map(|p| AUTO_TARGET_POST_DB - p).unwrap_or(0.0),
+            gain_db: cached
+                .map(|p| (AUTO_TARGET_POST_DB - p).clamp(GAIN_MIN_DB, GAIN_MAX_DB))
+                .unwrap_or(0.0),
             user_gain: cfg.gain.clamp(0.1, 8.0),
             soft_clip: cfg.soft_clip,
             autogain: cfg.autogain,
             ceiling_db: if cfg.autogain { 0.0 } else { ceiling },
             peaks: Vec::with_capacity(2048),
             acc: 0.0,
+            played: 0.0,
             p90_est: cached.unwrap_or(NEUTRAL_REF_DB),
             frozen: cached.is_some(),
             done_p90,
@@ -401,6 +421,7 @@ impl WaveAgc {
             if self.peaks.len() < EST_MAX_WINDOWS {
                 self.peaks.push(peak_db);
             }
+            self.played += dt_s;
             self.acc += dt_s;
             if self.peaks.len() < EST_MIN_WINDOWS {
                 return;
@@ -416,7 +437,9 @@ impl WaveAgc {
             let p90 = v[idx];
             // 对称限速：上行下行都是 0.3 dB/s，不再当棘轮
             self.p90_est = approach(self.p90_est, p90, P90_SLEW_DB_PER_S * elapsed);
-            self.gain_db = AUTO_TARGET_POST_DB - self.p90_est;
+            // 置信度爬坡 + 硬钳位：早期样本少就别拿 10 秒的估计去推整首
+            let (lo, hi) = gain_limits(self.played);
+            self.gain_db = (AUTO_TARGET_POST_DB - self.p90_est).clamp(lo, hi);
             *self.done_p90.lock().unwrap() = Some(self.p90_est);
             return;
         }
@@ -501,6 +524,7 @@ impl PcmAnalyzer {
         start_secs: f64,
         wave_cfg: WaveCfg,
         p90_db: Option<f32>,
+        seg_no: usize,
     ) -> Option<PcmAnalyzer> {
         let dir = eq_dir();
         let _ = std::fs::create_dir_all(&dir);
@@ -538,9 +562,7 @@ impl PcmAnalyzer {
         let wave = Arc::new(Mutex::new(WaveBuf::default()));
         let auto_gain_db = Arc::new(Mutex::new(0.0f32));
         let est_p90: Arc<Mutex<Option<f32>>> = Arc::new(Mutex::new(None));
-        // 解码器第几次运行（从 1 开始）：dump 出来就是「重启段数」
-        static SEG_NO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let seg_no = SEG_NO.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        // 段号由界面给：同一首歌内从 1 开始，重启一次 +1（换歌重新从 1 数）
         let stop = Arc::new(Mutex::new(false));
         {
             let wave = wave.clone();
@@ -751,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn autogain_maps_p90_to_six_and_half() {
+    fn autogain_maps_p90_to_target_level() {
         let db = |x: f32| 10f32.powf(x / 20.0);
         // 软限幅（默认）：p90 落在 8/9 附近，更响的被压到接近但不越过 1
         let cfg = WaveCfg {
@@ -761,9 +783,10 @@ mod tests {
             reference_dbfs: -6.0,
         };
         let cell = Arc::new(Mutex::new(None));
-        let agc = WaveAgc::new(cfg, Some(-20.0), cell.clone());
-        let amp = agc.amp(db(-20.0));
-        assert!((amp * 9.0 - 6.5).abs() < 0.35, "p90 应落在 6.5/9: {amp}");
+        // 缓存 p90=-14 → 需要的增益正好 +6（钳位边界内），p90 应落在 6/9
+        let agc = WaveAgc::new(cfg, Some(-14.0), cell.clone());
+        let amp = agc.amp(db(-14.0));
+        assert!((amp * 9.0 - 6.0).abs() < 0.1, "p90 应落在 6/9: {amp}");
         assert!(agc.amp(1.0) <= 1.0);
         assert!(agc.amp(db(-50.0)) < 0.15, "安静段要接近 0");
 
@@ -773,10 +796,10 @@ mod tests {
                 soft_clip: false,
                 ..cfg
             },
-            Some(-20.0),
+            Some(-14.0),
             cell,
         );
-        assert!((hard.amp(db(-20.0)) * 9.0 - 6.5).abs() < 0.05);
+        assert!((hard.amp(db(-14.0)) * 9.0 - 6.0).abs() < 0.05);
         // 更响的削到 1，不会超过
         assert_eq!(hard.amp(1.0), 1.0);
     }
@@ -838,6 +861,33 @@ mod tests {
         // 安静窗：两个量都要小
         assert!(agc.norm_pre(dbv(-50.0)) < 0.05);
         assert!(agc.amp(dbv(-50.0)) * 9.0 < 0.5);
+    }
+
+    #[test]
+    fn autogain_ramps_confidence_and_clamps() {
+        assert_eq!(gain_limits(5.0), (-2.0, 2.0));
+        assert_eq!(gain_limits(30.0), (-4.0, 4.0));
+        assert_eq!(gain_limits(60.0), (-6.0, 6.0));
+
+        // 前 15 秒即使歌很轻，也不许把增益推到 +12
+        let cfg = WaveCfg {
+            autogain: true,
+            soft_clip: true,
+            gain: 1.0,
+            reference_dbfs: -6.0,
+        };
+        let cell = Arc::new(Mutex::new(None));
+        let mut agc = WaveAgc::new(cfg, None, cell);
+        for _ in 0..400 {
+            agc.observe(-45.0, 0.032);
+        }
+        assert!(agc.auto_gain_db() <= 2.01, "前 15 秒最多 +2: {}", agc.auto_gain_db());
+        // 45 秒后放开到 ±6
+        for _ in 0..1200 {
+            agc.observe(-45.0, 0.032);
+        }
+        let g = agc.auto_gain_db();
+        assert!((-6.01..=6.01).contains(&g), "增益必须在 ±6 内: {g}");
     }
 
     #[test]

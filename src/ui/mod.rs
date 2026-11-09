@@ -219,6 +219,8 @@ pub struct App {
     eq_last_pos: Option<f64>,
     /// 这首歌已冻结的满高基准（给界面显示「自动 +X dB」）
     eq_auto_ref: Option<f32>,
+    /// 当前这首歌里解码器是第几次启动（dump 的段号，换歌归 1）
+    eq_seg: usize,
     /// 逐曲响度缓存：歌曲 key → p90 dB（存 ~/.cache/zmusic/eq_gain.json）
     eq_cache: std::collections::HashMap<String, f32>,
     /// 缓存是否已从磁盘读过
@@ -373,6 +375,7 @@ impl App {
             eq_hold: None,
             eq_last_pos: None,
             eq_auto_ref: None,
+            eq_seg: 0,
             eq_cache: std::collections::HashMap::new(),
             eq_cache_loaded: false,
             eq_fail: 0,
@@ -839,6 +842,7 @@ impl App {
                 if a.url() != url {
                     self.eq_analyzer = None;
                     self.eq_auto_ref = None;
+                    self.eq_seg = 0; // 换歌：段号重新从 1 数
                 }
             }
             if let Some(a) = self.eq_analyzer.as_ref() {
@@ -871,7 +875,14 @@ impl App {
         // 逐曲响度：缓存命中就直接用（第二次听零延迟）；没命中就边放边估
         let key = self.eq_cache_key();
         let cached = key.as_ref().and_then(|k| self.eq_cache.get(k).copied());
-        match crate::ui::eq::PcmAnalyzer::start(&url, st.time_pos.unwrap_or(0.0), wave_cfg, cached) {
+        self.eq_seg += 1;
+        match crate::ui::eq::PcmAnalyzer::start(
+            &url,
+            st.time_pos.unwrap_or(0.0),
+            wave_cfg,
+            cached,
+            self.eq_seg,
+        ) {
             Some(a) => self.eq_analyzer = Some(a),
             None => self.eq_failed(),
         }
