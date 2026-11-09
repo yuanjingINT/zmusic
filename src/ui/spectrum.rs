@@ -215,9 +215,17 @@ mod tests {
 
     #[test]
     fn wave_column_mirrors_around_center() {
+        // 零幅度：整列留白（画中线会被当成「框」）
         let mut g = DotGrid::new(1, 8);
         g.set_wave_column(0, 0.0);
-        assert!(g.is_set(0, 4)); // 中线
+        for r in 0..8 {
+            assert!(!g.is_set(0, r), "第 {r} 行不该有点");
+        }
+        // 幅度不足 1 个点也留白
+        g.set_wave_column(0, 0.05);
+        for r in 0..8 {
+            assert!(!g.is_set(0, r));
+        }
         let mut h = DotGrid::new(1, 8);
         h.set_wave_column(0, 1.0);
         assert!(h.is_set(0, 1)); // 顶（偶数行留一格边）
@@ -328,6 +336,10 @@ impl DotGrid {
         // 向下取整：安静段才会真的塌成 1 个点（细线），不会被四舍五入撑成一条厚带
         let span = (amp.clamp(0.0, 1.0) * span_max as f32).floor() as usize;
         let span = span.min(span_max);
+        // 零幅度（不足 1 个点）整列留白：不再画中线，否则连起来就是一条贯穿的「框」
+        if span == 0 {
+            return;
+        }
         for r in center.saturating_sub(span)..=(center + span).min(self.rows - 1) {
             self.set(col, r);
         }

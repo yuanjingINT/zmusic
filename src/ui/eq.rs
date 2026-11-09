@@ -263,7 +263,7 @@ impl Default for WaveCfg {
     fn default() -> Self {
         WaveCfg {
             reference_dbfs: -6.0,
-            gain: 1.9,
+            gain: 2.2,
         }
     }
 }

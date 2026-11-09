@@ -53,8 +53,8 @@ equalizer_source = "pcm"
 eq_agc = true
 # 波形满高对应的 dBFS（越小越容易顶满；默认 -6）
 eq_reference_dbfs = -6.0
-# 波形增益（1.0 = 不放大；默认 1.9，让副歌中位也能顶到 8/9 点）
-eq_gain = 1.9
+# 波形增益（1.0 = 不放大；默认 2.2：副歌中位能到 8/9，再高就大面积平顶了）
+eq_gain = 2.2
 
 [jamendo]
 # Jamendo 免费申请的 client_id（https://devportal.jamendo.com/）
@@ -135,7 +135,7 @@ impl Default for Animations {
             equalizer_source: EqSource::Pcm,
             eq_agc: true,
             eq_reference_dbfs: -6.0,
-            eq_gain: 1.9,
+            eq_gain: 2.2,
         }
     }
 }
@@ -334,7 +334,7 @@ impl Config {
                     parsed.ui.eq_reference_dbfs,
                     -6.0,
                 ),
-                eq_gain: pick_f32(env, "ZMUSIC_EQ_GAIN", parsed.ui.eq_gain, 1.9),
+                eq_gain: pick_f32(env, "ZMUSIC_EQ_GAIN", parsed.ui.eq_gain, 2.2),
                 equalizer_source: match pick("ZMUSIC_EQ_SOURCE", parsed.ui.equalizer_source, "pcm")
                     .as_str()
                 {
