@@ -22,6 +22,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Row {
+    Sources,
     Theme,
     Wave,
     WaveSpacing,
@@ -33,7 +34,8 @@ enum Row {
     Quality,
 }
 
-const ROWS: [Row; 9] = [
+const ROWS: [Row; 10] = [
+    Row::Sources,
     Row::Theme,
     Row::Wave,
     Row::WaveSpacing,
@@ -47,6 +49,11 @@ const ROWS: [Row; 9] = [
 
 struct State {
     sel: usize,
+    /// 启用的源 id（和 config.toml 的 [sources] enabled 同步）
+    sources: Vec<String>,
+    /// 正在编辑源列表：true 时 j/k 在源之间移动、空格切换
+    picking: bool,
+    pick_sel: usize,
     theme: usize,
     wave: bool,
     spacing: u8,
@@ -86,6 +93,9 @@ impl State {
             .unwrap_or(2);
         State {
             sel: 0,
+            sources: cfg.enabled_sources.clone(),
+            picking: false,
+            pick_sel: 0,
             theme,
             wave: cfg.animations.equalizer,
             spacing: cfg.animations.wave_spacing.clamp(1, 3),
@@ -103,6 +113,17 @@ impl State {
 
     fn value(&self, row: Row) -> String {
         match row {
+            Row::Sources => {
+                if self.sources.is_empty() {
+                    crate::tr!("（没有启用任何源，回车选择）", "(none enabled, Enter to choose)")
+                } else {
+                    crate::tr!(
+                        "{} 个（回车选择）",
+                        "{} (Enter to choose)",
+                        self.sources.len()
+                    )
+                }
+            }
             Row::Theme => theme_label(self.theme).to_string(),
             Row::Wave => yes_no(self.wave),
             Row::WaveSpacing => crate::tr!(
@@ -131,6 +152,10 @@ impl State {
     fn cycle(&mut self, dir: i32) {
         let row = ROWS[self.sel];
         match row {
+            Row::Sources => {
+                self.picking = true;
+                self.pick_sel = 0;
+            }
             Row::Theme => {
                 self.theme = wrap(self.theme, THEMES.len(), dir);
             }
@@ -219,6 +244,8 @@ impl State {
             let _ = std::fs::create_dir_all(parent);
         }
         std::fs::write(path, toml::to_string_pretty(&doc)?)?;
+        // 源列表单独写（这一段的结构由 Config::save_enabled_sources 统一维护）
+        cfg.save_enabled_sources(&self.sources)?;
         self.dirty = false;
         self.status = Some((
             crate::tr!("已写入 {}", "Written to {}", path.display()),
@@ -263,6 +290,35 @@ fn loop_ui(
         term.draw(|f| draw(f, st))?;
         if let Event::Key(k) = event::read()? {
             if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            // 源选择模式：j/k 移动，空格切换，Enter/Esc 回到设置列表
+            if st.picking {
+                match k.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        st.pick_sel = st.pick_sel.saturating_sub(1)
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        st.pick_sel = (st.pick_sel + 1).min(crate::source::ALL_SOURCE_IDS.len() - 1)
+                    }
+                    KeyCode::Char(' ') => {
+                        let id = crate::source::ALL_SOURCE_IDS[st.pick_sel].to_string();
+                        if let Some(pos) = st.sources.iter().position(|x| *x == id) {
+                            st.sources.remove(pos);
+                        } else {
+                            st.sources.push(id);
+                            st.sources.sort_by_key(|x| {
+                                crate::source::ALL_SOURCE_IDS
+                                    .iter()
+                                    .position(|y| y == x)
+                                    .unwrap_or(usize::MAX)
+                            });
+                        }
+                        st.dirty = true;
+                    }
+                    KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => st.picking = false,
+                    _ => {}
+                }
                 continue;
             }
             // 路径编辑模式：先吃字符
@@ -332,6 +388,7 @@ fn draw(f: &mut ratatui::Frame, st: &State) {
     let labels: Vec<&str> = ROWS
         .iter()
         .map(|r| match r {
+            Row::Sources => crate::i18n::t("set.sources"),
             Row::Theme => crate::i18n::t("set.theme"),
             Row::Wave => crate::i18n::t("set.wave"),
             Row::WaveSpacing => crate::i18n::t("set.spacing"),
@@ -376,6 +433,52 @@ fn draw(f: &mut ratatui::Frame, st: &State) {
             ]))
         })
         .collect();
+    if st.picking {
+        // 源选择：一屏列出全部内置源，[x] 表示启用
+        let rows: Vec<ListItem> = crate::source::ALL_SOURCE_IDS
+            .iter()
+            .map(|id| {
+                let on = st.sources.iter().any(|e| e == id);
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        if on { "[x] " } else { "[ ] " },
+                        Style::default().fg(if on {
+                            Color::Rgb(166, 209, 137)
+                        } else {
+                            Color::Rgb(147, 143, 153)
+                        }),
+                    ),
+                    Span::styled(
+                        format!("{:<16} {}", id, crate::source::source_display(id)),
+                        Style::default().fg(Color::Rgb(230, 225, 229)),
+                    ),
+                ]))
+            })
+            .collect();
+        let mut state = ListState::default();
+        state.select(Some(st.pick_sel));
+        f.render_stateful_widget(
+            List::new(rows)
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Rgb(74, 68, 88))
+                        .fg(Color::Rgb(242, 231, 255))
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("▸ "),
+            row_area,
+            &mut state,
+        );
+        let help = Paragraph::new(Line::from(Span::styled(
+            crate::tr!(
+                "j/k 移动   空格 启用/停用   Enter 返回   s 保存（保存后按 R 重新探测）",
+                "j/k move   Space toggle   Enter back   s save (press R in the player afterwards)"
+            ),
+            Style::default().fg(Color::Rgb(147, 143, 153)),
+        )));
+        f.render_widget(help, help_area);
+        return;
+    }
     let mut state = ListState::default();
     state.select(Some(st.sel));
     f.render_stateful_widget(

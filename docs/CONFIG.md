@@ -46,6 +46,9 @@ zmuse source remove migu
 enabled = ["netease", "youtube"]
 ```
 
+也可以直接在 `zmuse config` 里改：第一行「源 · 已启用」按 Enter 打开勾选列表，
+`j/k` 移动、空格启用/停用、`s` 保存。
+
 写回后立即生效；已经在跑的播放器按一下 `R`（重新探测）就会按新列表重建，不用重启。
 `meting` 是分组别名（展开成四个 meting 源），`all` 是全部；id 写错会报错并列出可用的 id。
 停用网易云是允许的，但会提示「你没有默认源了」。

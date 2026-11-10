@@ -129,6 +129,8 @@ pub fn t(key: &str) -> &'static str {
         // 设置页
         ("set.title", false) => "设置",
         ("set.title", true) => "Settings",
+        ("set.sources", false) => "源 · 已启用",
+        ("set.sources", true) => "Sources · enabled",
         ("set.theme", false) => "外观 · 主题",
         ("set.theme", true) => "Appearance · theme",
         ("set.wave", false) => "外观 · 波形",

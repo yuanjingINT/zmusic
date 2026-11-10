@@ -222,6 +222,9 @@ zmuse source add youtube soundcloud audius
 zmuse source remove migu     # switch one off again
 ```
 
+The same list is editable interactively: `zmuse config`, first row "Sources ·
+enabled", `Enter` opens a checklist where `Space` toggles a source and `s` saves.
+
 `add`/`remove` write `[sources] enabled` in `~/.config/zmuse/config.toml`,
 rebuild the registry on the spot, and a running player picks it up on the next
 `R` (re-probe) — no restart. `meting` expands to the four Meting sources and
