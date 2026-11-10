@@ -89,9 +89,12 @@ pub fn ext_from_url(url: &str) -> Option<String> {
     None
 }
 
+/// mpv 的 IPC socket 路径。带 pid：同时开两个 zmuse 时，后起的那个会把
+/// socket 文件改名重建（mpv spawn 前会 remove_file），抢走前一个实例的控制通道。
+/// 各自一份 pid 就互不干扰。
 pub fn mpv_socket() -> String {
     let user = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
-    format!("/tmp/ncm_mpv_{}.sock", user)
+    format!("/tmp/ncm_mpv_{}-{}.sock", user, std::process::id())
 }
 
 pub fn parse_lrc(text: &str) -> Vec<(u64, String)> {
@@ -143,4 +146,21 @@ fn parse_lrc_time(tag: &str) -> Option<u64> {
     let m: f64 = m.parse().ok()?;
     let s: f64 = s.parse().ok()?;
     Some(((m * 60.0 + s) * 1000.0) as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 两个实例的 mpv socket 不能撞：路径里带 pid
+    #[test]
+    fn mpv_socket_is_per_process() {
+        let s = mpv_socket();
+        assert!(s.ends_with(".sock"), "{s}");
+        assert!(
+            s.contains(&format!("-{}.sock", std::process::id())),
+            "socket 路径要带 pid: {s}"
+        );
+        assert!(!s.contains(' '), "socket 路径不能有空格: {s}");
+    }
 }
