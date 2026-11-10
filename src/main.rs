@@ -122,7 +122,7 @@ fn source_cli(rest: &[String]) -> anyhow::Result<()> {
     match cmd {
         "list" | "ls" => {
             if all_flag {
-                println!("{:<16} {:<14} {}", "id", "name", "enabled");
+                println!("{:<16} {:<14} enabled", "id", "name");
                 for id in ALL_SOURCE_IDS {
                     let on = current.iter().any(|e| e == id);
                     println!(
