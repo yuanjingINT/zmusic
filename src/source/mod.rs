@@ -5,6 +5,7 @@
 //! 搜索类型用枚举（不再把网易云的 1/100/1000/10 漏到上层）。
 
 pub mod agg;
+pub mod archive;
 pub mod audius;
 pub mod ccmixter;
 pub mod health;
@@ -143,8 +144,15 @@ pub fn source_priority(id: &str) -> u8 {
         "jamendo" => 11,
         "wikimedia" => 12,
         "opengameart" => 13,
+        "archive" => 14,
         _ => 99,
     }
+}
+
+/// 这个源在国内直连不通、必须走配置里的代理：搜索用 `http::` client 的
+/// adapter（archive）自己会经桥走代理，mpv 播放时也得挂同一个出口。
+pub fn needs_outbound_proxy(id: &str) -> bool {
+    matches!(id, "youtube" | "soundcloud" | "archive")
 }
 
 /// 按优先级排序两个源 id（同优先级保持原有先后）
@@ -169,6 +177,7 @@ pub const ALL_SOURCE_IDS: &[&str] = &[
     "jamendo",
     "wikimedia",
     "opengameart",
+    "archive",
 ];
 
 /// 把用户输入展开成具体 id：支持 `meting`（四个 meting 源）和 `all`。
@@ -225,6 +234,7 @@ pub fn source_display_lang(id: &str, zh: bool) -> String {
         "wikimedia" => "Wikimedia".to_string(),
         "jamendo" => "Jamendo".to_string(),
         "opengameart" => "OpenGameArt".to_string(),
+        "archive" => "Internet Archive".to_string(),
         other => other.to_string(),
     }
 }
@@ -345,6 +355,9 @@ impl SourceRegistry {
         }
         if on("opengameart") {
             reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
+        }
+        if on("archive") {
+            reg.register(Arc::new(archive::ArchiveSource::new(proxy.clone())));
         }
         reg
     }
@@ -525,6 +538,7 @@ mod tests {
             "jamendo",
             "wikimedia",
             "opengameart",
+            "archive",
         ];
         // 只断言相对顺序：表里还有 baidu/kuwo 两个不在 Chief 列表里的源
         for w in order.windows(2) {
@@ -597,6 +611,7 @@ mod tests {
             ("wikimedia", "Wikimedia"),
             ("jamendo", "Jamendo"),
             ("opengameart", "OpenGameArt"),
+            ("archive", "Internet Archive"),
         ];
         for (id, want) in cases {
             assert_eq!(source_display(id), want, "id={id}");
@@ -620,6 +635,7 @@ mod tests {
             "wikimedia",
             "jamendo",
             "opengameart",
+            "archive",
         ] {
             let en = source_display_lang(id, false);
             assert!(!en.is_empty(), "{id} 英文名为空");
@@ -628,6 +644,15 @@ mod tests {
                 "{id} 英文名混了中文: {en}"
             );
         }
+    }
+
+    #[test]
+    fn outbound_proxy_needed_only_for_blocked_sources() {
+        assert!(needs_outbound_proxy("archive"));
+        assert!(needs_outbound_proxy("youtube"));
+        assert!(needs_outbound_proxy("soundcloud"));
+        assert!(!needs_outbound_proxy("netease"));
+        assert!(!needs_outbound_proxy("audius"));
     }
 
     #[test]

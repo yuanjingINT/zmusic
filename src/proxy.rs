@@ -34,6 +34,12 @@ pub fn parse(proxy: Option<&str>) -> Option<ProxyKind> {
 
 /// 给 mpv 用的代理地址。HTTP 代理原样返回；SOCKS 代理起一次内置桥，返回桥的地址。
 pub fn mpv_proxy(proxy: Option<&str>) -> Result<Option<String>> {
+    http_proxy(proxy)
+}
+
+/// 任何只认 HTTP 代理的客户端（mpv、reqwest）都能用的地址：
+/// SOCKS 代理会起一次内置桥转成 `http://127.0.0.1:<port>`。
+pub fn http_proxy(proxy: Option<&str>) -> Result<Option<String>> {
     match parse(proxy) {
         None => Ok(None),
         Some(ProxyKind::Http(p)) => Ok(Some(p)),

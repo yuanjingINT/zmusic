@@ -3019,7 +3019,7 @@ impl App {
             match hit {
                 Some((u, used)) => {
                     let mpv_proxy =
-                        if crate::source::ytdlp::YtDlpSource::needs_proxy_for(&used.source) {
+                        if crate::source::needs_outbound_proxy(&used.source) {
                             crate::proxy::mpv_proxy(proxy_cfg.as_deref()).ok().flatten()
                         } else {
                             None

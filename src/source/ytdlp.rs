@@ -139,11 +139,6 @@ impl YtDlpSource {
         )?;
         Ok(parse_items(&text, self.site))
     }
-
-    /// 给 UI 用：这个源是否要靠 yt-dlp 取流（代理要跟着走）
-    pub fn needs_proxy_for(source: &str) -> bool {
-        matches!(source, "youtube" | "soundcloud")
-    }
 }
 
 /// 跑一条 yt-dlp 命令，带超时；子进程 stdout 单独线程读，避免管道缓冲卡死。
@@ -496,9 +491,9 @@ not-json-line
 
     #[test]
     fn proxy_routing_matches_ytdlp_backed_sources() {
-        assert!(YtDlpSource::needs_proxy_for("youtube"));
-        assert!(YtDlpSource::needs_proxy_for("soundcloud"));
-        assert!(!YtDlpSource::needs_proxy_for("netease"));
-        assert!(!YtDlpSource::needs_proxy_for("meting:tencent"));
+        assert!(crate::source::needs_outbound_proxy("youtube"));
+        assert!(crate::source::needs_outbound_proxy("soundcloud"));
+        assert!(!crate::source::needs_outbound_proxy("netease"));
+        assert!(!crate::source::needs_outbound_proxy("meting:tencent"));
     }
 }

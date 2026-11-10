@@ -63,6 +63,7 @@ enabled = ["netease", "youtube"]
 | `migu` | 咪咕 | 搜索不带时长 |
 | `youtube` / `soundcloud` | yt-dlp 系 | 需要 `yt-dlp` 和代理 |
 | `audius` / `ccmixter` / `jamendo` / `wikimedia` / `opengameart` | 公开免费源 | Jamendo 需要 client_id |
+| `archive` | Internet Archive | 需要代理（国内直连被 DNS 污染） |
 
 ## 源 → 需要什么
 
@@ -78,6 +79,7 @@ enabled = ["netease", "youtube"]
 | Jamendo | 否 | `[jamendo] client_id`（免费申请） |
 | Wikimedia Commons | 是 | 只解析 IPv6，网络没有 IPv6 时降级 |
 | OpenGameArt | 是 | 无（抓页面） |
+| Internet Archive | 配了代理才行 | `[ytdlp] proxy`；archive.org 国内被 DNS 污染，没代理时该源显示不可用 |
 
 说明：bilibili 曾接入过（搜索走它的 web API、取流借 `yt-dlp`），后按需求移除——结果多是
 视频切片、时长不稳定，详见 README 的「没接入」表。

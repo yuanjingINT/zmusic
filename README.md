@@ -251,6 +251,7 @@ guessing.
 | Wikimedia Commons | `wikimedia` | public/free | resolves IPv6 only, degrades on slow networks |
 | Jamendo | `jamendo` | public/free | needs `ZMUSE_JAMENDO_CLIENT_ID`, greyed out otherwise |
 | OpenGameArt | `opengameart` | public/free | scrapes the page, single tracks only |
+| Internet Archive | `archive` | public/free | one row per item (its first playable MP3 with a known length); needs a proxy in China |
 
 Not integrated (each with the reason we measured):
 
@@ -325,7 +326,7 @@ Ordering and the representative source follow a fixed priority
 ```
 netease > qq > meting:tencent > meting:kugou > meting:baidu > meting:kuwo
         > migu > youtube > soundcloud
-        > audius > ccmixter > jamendo > wikimedia > opengameart
+        > audius > ccmixter > jamendo > wikimedia > opengameart > archive
 ```
 
 - registration order = `S` cycle order = this priority; NetEase is always first
@@ -357,6 +358,10 @@ practice:
   proxy is `socks5(h)://`, zmuse starts a small local bridge (HTTP CONNECT →
   SOCKS5) listening on `127.0.0.1` only, used for tracks from `youtube` /
   `soundcloud`; for other sources it is cleared again and playback goes direct
+- the `archive` source (Internet Archive) shares the same `[ytdlp] proxy` for
+  both its searches and its playback: `archive.org` is DNS-poisoned in China, so
+  without a proxy that source simply reports itself unavailable (`zmuse source
+  add archive` still writes the entry; it lights up once a proxy is configured)
 - with an `http://…` proxy it is handed to mpv as-is and no bridge is started
 
 If `yt-dlp` is missing from PATH, the proxy is down, or it times out, that source
