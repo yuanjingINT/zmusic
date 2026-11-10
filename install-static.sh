@@ -11,8 +11,16 @@
 #   --prefix DIR   install into DIR (default ~/.local/bin or $ZMUSE_PREFIX)
 #   --version X    install a specific version instead of "latest"
 #   --uninstall    remove the installed binary
-#   --no-gpg       skip the signature check (sha256 is always checked)
+#   --insecure-sha-only  install without gpg (sha256 from SHA256SUMS still checked)
+#   --no-sidecar   do not install the Meting sidecar / systemd user unit
 #   --help
+#
+# Download layout (published by the release job):
+#   <base>/latest                      plain-text version, atomically replaced
+#   <base>/v<ver>/SHA256SUMS           one line per artifact
+#   <base>/v<ver>/SHA256SUMS.sig       detached signature of SHA256SUMS
+#   <base>/v<ver>/zmuse-<ver>-linux-<arch>.tar.gz
+#   <base>/v<ver>/zmuse-<ver>-linux-<arch>.tar.gz (unpacked: zmuse-<ver>-linux-<arch>/zmuse)
 #
 # Environment (mirrors / CI):
 #   ZMUSE_INSTALL_BASE  base URL of the download directory
@@ -29,6 +37,7 @@ PREFIX="${ZMUSE_PREFIX:-$HOME/.local/bin}"
 VERSION=""
 DO_UNINSTALL=0
 DO_GPG=1
+DO_SIDECAR=1
 
 die() { printf 'zmuse: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
@@ -43,7 +52,8 @@ while [ $# -gt 0 ]; do
         --prefix)    [ $# -ge 2 ] || die "--prefix needs a directory"; PREFIX="$2"; shift 2 ;;
         --version)   [ $# -ge 2 ] || die "--version needs a value"; VERSION="$2"; shift 2 ;;
         --uninstall) DO_UNINSTALL=1; shift ;;
-        --no-gpg)    DO_GPG=0; shift ;;
+        --no-gpg|--insecure-sha-only) DO_GPG=0; shift ;;
+        --no-sidecar) DO_SIDECAR=0; shift ;;
         --help|-h)   usage ;;
         *)           die "unknown option: $1 (try --help)" ;;
     esac
@@ -60,6 +70,15 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
     else
         say "nothing to remove at $BIN"
     fi
+    if [ -f "$HOME/.config/systemd/user/zmuse-meting.service" ]; then
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --user disable --now zmuse-meting.service >/dev/null 2>&1 || true
+        fi
+        rm -f "$HOME/.config/systemd/user/zmuse-meting.service"
+        command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/null 2>&1 || true
+        say "removed the Meting sidecar unit"
+    fi
+    rm -rf "$HOME/.local/share/zmuse"
     say "your settings were left alone: ~/.config/zmuse and ~/.cache/zmuse"
     exit 0
 fi
@@ -87,19 +106,48 @@ esac
 
 NAME="zmuse-$VERSION-linux-$ARCH"
 TARBALL="$NAME.tar.gz"
+VDIR="$BASE/v$VERSION"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/zmuse-install.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
 say "zmuse $VERSION ($ARCH) -> $PREFIX"
 
+# ---------------------------------------------------------------- checksum list
+# 先拿 SHA256SUMS 和它的签名：清单是被签名的那一份，tarball 的哈希只从清单里取。
+curl -fsSL -o "$TMP/SHA256SUMS" "$VDIR/SHA256SUMS" ||
+    die "could not fetch $VDIR/SHA256SUMS"
+WANT="$(awk -v f="$TARBALL" '$2 == f || $2 == "*"f {print $1; exit}' "$TMP/SHA256SUMS")"
+[ -n "$WANT" ] || die "$TARBALL is not listed in SHA256SUMS (unknown version $VERSION for $ARCH?)"
+
+# ---------------------------------------------------------------- signature
+if [ "$DO_GPG" -eq 1 ]; then
+    if ! command -v gpg >/dev/null 2>&1; then
+        die "gpg is required to verify the signature; install gnupg, or pass --insecure-sha-only"
+    fi
+    curl -fsSL -o "$TMP/SHA256SUMS.sig" "$VDIR/SHA256SUMS.sig" ||
+        die "signature SHA256SUMS.sig is missing; refusing to install unverified (use --insecure-sha-only)"
+    curl -fsSL -o "$TMP/repo.pub" "$KEY_URL" ||
+        die "could not fetch the repository key from $KEY_URL"
+    # Throwaway keyring: the user's ~/.gnupg is never modified.
+    export GNUPGHOME="$TMP/gnupg"
+    mkdir -p "$GNUPGHOME"
+    chmod 700 "$GNUPGHOME"
+    gpg --batch --quiet --import "$TMP/repo.pub" >/dev/null 2>&1 ||
+        die "could not import the repository key"
+    FPS="$(gpg --batch --with-colons --fingerprint 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')"
+    [ "$FPS" = "$EXPECTED_FP" ] ||
+        die "repository key fingerprint mismatch: got $FPS, expected $EXPECTED_FP"
+    gpg --batch --quiet --verify "$TMP/SHA256SUMS.sig" "$TMP/SHA256SUMS" >/dev/null 2>&1 ||
+        die "signature verification failed for SHA256SUMS"
+    say "  signature ok ($EXPECTED_FP)"
+else
+    say "  WARNING: signature check skipped (--insecure-sha-only)"
+fi
+
 # ---------------------------------------------------------------- download
 say "  downloading $TARBALL"
-curl -fsSL -o "$TMP/$TARBALL" "$BASE/$TARBALL" || die "download failed: $BASE/$TARBALL"
+curl -fsSL -o "$TMP/$TARBALL" "$VDIR/$TARBALL" || die "download failed: $VDIR/$TARBALL"
 
-# ---------------------------------------------------------------- checksum
-WANT="$(curl -fsSL "$BASE/$TARBALL.sha256" 2>/dev/null | awk '{print $1}' | head -1)" ||
-    die "could not fetch $TARBALL.sha256"
-[ -n "$WANT" ] || die "empty checksum file"
 if command -v sha256sum >/dev/null 2>&1; then
     GOT="$(sha256sum "$TMP/$TARBALL" | awk '{print $1}')"
 elif command -v shasum >/dev/null 2>&1; then
@@ -109,30 +157,6 @@ else
 fi
 [ "$GOT" = "$WANT" ] || die "sha256 mismatch: expected $WANT, got $GOT"
 say "  sha256 ok"
-
-# ---------------------------------------------------------------- signature
-if [ "$DO_GPG" -eq 1 ]; then
-    if ! command -v gpg >/dev/null 2>&1; then
-        say "  gpg not installed, skipping the signature check (sha256 was verified)"
-    else
-        curl -fsSL -o "$TMP/tarball.sig" "$BASE/$TARBALL.sig" 2>/dev/null ||
-            die "signature $TARBALL.sig is missing; refusing to install unverified (use --no-gpg to override)"
-        curl -fsSL -o "$TMP/repo.pub" "$KEY_URL" ||
-            die "could not fetch the repository key from $KEY_URL"
-        # Throwaway keyring: the user's ~/.gnupg is never modified.
-        export GNUPGHOME="$TMP/gnupg"
-        mkdir -p "$GNUPGHOME"
-        chmod 700 "$GNUPGHOME"
-        gpg --batch --quiet --import "$TMP/repo.pub" >/dev/null 2>&1 ||
-            die "could not import the repository key"
-        FPS="$(gpg --batch --with-colons --fingerprint 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')"
-        [ "$FPS" = "$EXPECTED_FP" ] ||
-            die "repository key fingerprint mismatch: got $FPS, expected $EXPECTED_FP"
-        gpg --batch --quiet --verify "$TMP/tarball.sig" "$TMP/$TARBALL" >/dev/null 2>&1 ||
-            die "signature verification failed for $TARBALL"
-        say "  signature ok ($EXPECTED_FP)"
-    fi
-fi
 
 # ---------------------------------------------------------------- install
 tar -xzf "$TMP/$TARBALL" -C "$TMP" || die "could not unpack $TARBALL"
@@ -157,6 +181,36 @@ case "$GOT_VER" in
     "")           die "the binary does not run on this machine (glibc/musl mismatch?)" ;;
     *)            die "unexpected version: $GOT_VER" ;;
 esac
+
+# ---------------------------------------------------------------- sidecar + docs
+SIDE_DST="$HOME/.local/share/zmuse/sidecar"
+UNIT_DST="$HOME/.config/systemd/user/zmuse-meting.service"
+if [ "$DO_SIDECAR" -eq 1 ] && [ -f "$TMP/$NAME/sidecar/meting.js" ]; then
+    mkdir -p "$SIDE_DST"
+    cp -a "$TMP/$NAME/sidecar/." "$SIDE_DST/"
+    say "  sidecar -> $SIDE_DST"
+    if [ -f "$TMP/$NAME/zmuse-meting.service" ]; then
+        mkdir -p "$(dirname "$UNIT_DST")"
+        install -m 644 "$TMP/$NAME/zmuse-meting.service" "$UNIT_DST"
+        say "  unit    -> $UNIT_DST"
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
+elif [ "$DO_SIDECAR" -eq 1 ]; then
+    say ""
+    say "note: this tarball has no Meting sidecar, so QQ / Kugou / Baidu / Kuwo will"
+    say "      report \"sidecar not running\". Everything else works."
+fi
+
+# 文档和许可证
+DOC_DST="$HOME/.local/share/doc/zmuse"
+for f in README.md CONFIG.md LICENSE; do
+    if [ -f "$TMP/$NAME/$f" ]; then
+        mkdir -p "$DOC_DST"
+        install -m 644 "$TMP/$NAME/$f" "$DOC_DST/$f"
+    fi
+done
 
 # ---------------------------------------------------------------- runtime deps
 if ! command -v mpv >/dev/null 2>&1; then
@@ -199,6 +253,14 @@ if command -v zmuse >/dev/null 2>&1; then
     if [ "$SYS" != "$BIN" ]; then
         say ""
         say "note: your PATH resolves zmuse to $SYS first, so that one runs."
+    fi
+fi
+
+if [ "$DO_SIDECAR" -eq 1 ] && [ -f "$UNIT_DST" ] && command -v node >/dev/null 2>&1; then
+    if ! systemctl --user is-enabled zmuse-meting.service >/dev/null 2>&1; then
+        say ""
+        say "Enable the Meting sidecar (QQ / Kugou / Baidu / Kuwo sources):"
+        say "  systemctl --user enable --now zmuse-meting.service"
     fi
 fi
 
