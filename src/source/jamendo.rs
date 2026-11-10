@@ -1,4 +1,4 @@
-//! Jamendo：需要免费申请的 client_id（`ZMUSIC_JAMENDO_CLIENT_ID`）。
+//! Jamendo：需要免费申请的 client_id（`ZMUSE_JAMENDO_CLIENT_ID`）。
 //! 没有 key 时该源自报不可用，不影响其它源。
 
 use crate::models::{Album, Artist, Lyrics, SearchResult, Song};
@@ -15,7 +15,7 @@ pub struct JamendoSource {
 }
 
 impl JamendoSource {
-    /// `client_id` 来自 config.toml `[jamendo]`（或 ZMUSIC_JAMENDO_CLIENT_ID）
+    /// `client_id` 来自 config.toml `[jamendo]`（或 ZMUSE_JAMENDO_CLIENT_ID）
     pub fn with_client_id(client_id: Option<String>) -> Self {
         JamendoSource {
             base: BASE.to_string(),
@@ -37,7 +37,7 @@ impl JamendoSource {
         let id = self
             .client_id
             .as_deref()
-            .ok_or_else(|| anyhow!("Jamendo 需要 ZMUSIC_JAMENDO_CLIENT_ID"))?;
+            .ok_or_else(|| anyhow!("Jamendo 需要 ZMUSE_JAMENDO_CLIENT_ID"))?;
         Ok(format!(
             "{}{}?client_id={}&format=json{}",
             self.base,
@@ -175,7 +175,7 @@ mod tests {
             .search("x", 5, SearchKind::Song)
             .expect_err("无 key 必须报错");
         assert!(
-            err.to_string().contains("ZMUSIC_JAMENDO_CLIENT_ID"),
+            err.to_string().contains("ZMUSE_JAMENDO_CLIENT_ID"),
             "{err}"
         );
     }

@@ -60,8 +60,8 @@ impl Theme {
         if no_color || dumb {
             return Theme::mono();
         }
-        // 配置里选了单色（[ui] theme = "mono" → ZMUSIC_THEME），走单色调色板
-        if get("ZMUSIC_THEME")
+        // 配置里选了单色（[ui] theme = "mono" → ZMUSE_THEME），走单色调色板
+        if get("ZMUSE_THEME")
             .map(|v| v.eq_ignore_ascii_case("mono"))
             .unwrap_or(false)
         {

@@ -1,24 +1,30 @@
-# zmusic 配置指南
+# zmuse 配置指南
 
-zmusic 的所有服务/账号配置都在一个文件里：
+zmuse 的所有服务/账号配置都在一个文件里：
 
 ```
-~/.config/zmusic/config.toml
+~/.config/zmuse/config.toml
 ```
 
 生成并打开它：
 
 ```bash
-zmusic config          # 不存在就从内置模板生成，然后用 $EDITOR/$VISUAL/vi 打开
-zmusic config --print  # 只打印路径
+zmuse config          # 不存在就从内置模板生成，然后用 $EDITOR/$VISUAL/vi 打开
+zmuse config --print  # 只打印路径
 ```
 
 优先级：**环境变量 > config.toml > 内置默认值**。老的环境变量（`NCM_API`、`NCM_DIR`、
-`NCM_QUALITY`、`ZMUSIC_PROXY`、`ZMUSIC_METING_URL`、`ZMUSIC_METING_COOKIE`、
-`ZMUSIC_JAMENDO_CLIENT_ID`、`ZMUSIC_YTDLP_BIN`）都还生效，适合临时覆盖。
+`NCM_QUALITY`、`ZMUSE_PROXY`、`ZMUSE_METING_URL`、`ZMUSE_METING_COOKIE`、
+`ZMUSE_JAMENDO_CLIENT_ID`、`ZMUSE_YTDLP_BIN`）都还生效，适合临时覆盖。
 
-UI 偏好（播放顺序、上次选的源、下载位置）存在 `~/.config/zmusic/settings.json`，
+UI 偏好（播放顺序、上次选的源、下载位置）存在 `~/.config/zmuse/settings.json`，
 不在 config.toml 里，避免同一个值两处能改。
+
+**从 zmusic 改名过来**：第一次跑新版时，如果 `~/.config/zmuse` 不存在而
+`~/.config/zmusic` 在，会把旧目录**复制**一份过来（旧目录保留不删）；缓存
+`~/.cache/zmusic` → `~/.cache/zmuse` 同样处理。环境变量 `ZMUSE_*` 优先，没写时回退旧的
+`ZMUSIC_*`（`NCM_*` 那几个没改名）。Arch 包里带 `replaces=(zmusic)`/`conflicts=(zmusic)`，
+`pacman -Syu` 会自动换掉旧包。
 
 ## 源 → 需要什么
 
@@ -46,7 +52,7 @@ UI 偏好（播放顺序、上次选的源、下载位置）存在 `~/.config/zm
 播放器本身不带网易云 API，需要一个本地服务：
 
 ```bash
-cd ~/Projects/zmusic      # 或解包目录
+cd ~/Projects/zmuse      # 或解包目录
 ./setup.sh                # 首次：装依赖 + 起 systemd --user 服务 ncm-api
 ./setup.sh update         # 之后：更新 API 并重启
 ```
@@ -83,8 +89,8 @@ curl -s '127.0.0.1:8123/api?server=tencent&type=search&id=%E6%99%B4%E5%A4%A9&lim
 url = "http://127.0.0.1:8123"
 ```
 
-> 注意：Meting 搜索接口不给时长，zmusic 会在源内补一次 `type=duration` 再过滤掉没有时长的行。
-> 侧车必须和 zmusic 同版本（包里的 `meting-sidecar.service` 会随包更新）；用旧侧车会出现
+> 注意：Meting 搜索接口不给时长，zmuse 会在源内补一次 `type=duration` 再过滤掉没有时长的行。
+> 侧车必须和 zmuse 同版本（包里的 `meting-sidecar.service` 会随包更新）；用旧侧车会出现
 > 「Meting 源搜不到东西」——这时先 `systemctl --user restart meting-sidecar`，确认
 > `curl '127.0.0.1:8123/api?server=tencent&type=duration&id=0039MnYb0qxYhV'` 返回 `duration_ms`。
 
@@ -101,7 +107,7 @@ url = "http://127.0.0.1:8123"
 cookie = "uin=o0123456; qm_keyst=...; ..."
 ```
 
-也可以用环境变量临时覆盖：`export ZMUSIC_METING_COOKIE='uin=...; qm_keyst=...'`。
+也可以用环境变量临时覆盖：`export ZMUSE_METING_COOKIE='uin=...; qm_keyst=...'`。
 
 cookie 等价于该账号登录态：只放在本机 600 权限的文件/环境变量里，别提交进仓库、别外借。
 看到「仅搜索」还以为是 bug 的话，先检查这一项。
@@ -121,8 +127,8 @@ binary = "yt-dlp"                       # 或绝对路径
 proxy  = "socks5h://127.0.0.1:1080"
 ```
 
-关键约束：**zmusic 与 mpv 必须走同一个出口**。YouTube 的 googlevideo 直链把签名绑在出口 IP 上，
-换 IP 就 403。mpv 只认 HTTP 代理，所以配 `socks5(h)://` 时 zmusic 会在本机起一个只监听
+关键约束：**zmuse 与 mpv 必须走同一个出口**。YouTube 的 googlevideo 直链把签名绑在出口 IP 上，
+换 IP 就 403。mpv 只认 HTTP 代理，所以配 `socks5(h)://` 时 zmuse 会在本机起一个只监听
 `127.0.0.1` 的 HTTP CONNECT → SOCKS5 小桥，只给 yt-dlp 系曲目用；其它源自动回直连。
 
 验证：
@@ -147,7 +153,7 @@ client_id = "你的 client_id"
 
 ## 5. 界面与波形（`[ui]`）
 
-播放页那条对称波形和动效都是可调的，改 `~/.config/zmusic/config.toml` 的 `[ui]` 段：
+播放页那条对称波形和动效都是可调的，改 `~/.config/zmuse/config.toml` 的 `[ui]` 段：
 
 | 配置 | 默认 | 说明 |
 |------|------|------|
@@ -168,7 +174,7 @@ client_id = "你的 client_id"
 1. **第一次听**：还不知道这首歌有多响，用固定增益（`eq_gain`，默认 1.6）整首播完。
    同时用波形那条本来就在跑的 1x 解码流，顺手把每个 32ms 窗的峰值攒起来。
 2. **播到 80%**：算出整曲 p90（每窗峰值的 90 分位），按「p90 落到 6.5/9 档」反解增益，
-   钳在 **−12 ~ +6 dB**，写进 `~/.cache/zmusic/eq_gain.json`（key 是 `源|曲目id`）。
+   钳在 **−12 ~ +6 dB**，写进 `~/.cache/zmuse/eq_gain.json`（key 是 `源|曲目id`）。
 3. **第二次起**：第一秒就按这个标定显示，整首恒定。
 4. 拖动/暂停不重新估；换歌才算新的一首。
 
@@ -190,16 +196,16 @@ client_id = "你的 client_id"
 
 ```bash
 # 把波形整体抬高一点
-ZMUSIC_EQ_GAIN=1.9 zmusic
+ZMUSE_EQ_GAIN=1.9 zmuse
 
 # 关掉逐曲自动增益（省掉那一次额外下载），只用固定增益
-ZMUSIC_EQ_AUTOGAIN=0 zmusic
+ZMUSE_EQ_AUTOGAIN=0 zmuse
 
 # 关掉软限幅，回到硬切
-ZMUSIC_EQ_SOFT_CLIP=0 zmusic
+ZMUSE_EQ_SOFT_CLIP=0 zmuse
 
 # 帧率调到 15，终端写入减半
-ZMUSIC_EQ_FPS=15 zmusic
+ZMUSE_EQ_FPS=15 zmuse
 ```
 
 参考量（晴天原唱，副歌最响 10 秒，点高按「中线上下各几点」算，满 9）：
@@ -210,9 +216,9 @@ ZMUSIC_EQ_FPS=15 zmusic
 | `eq_gain=1.6` + 软限幅 | 5/9 | 7/9 | 0% |
 | `eq_gain=2.2` + 软限幅 | 6/9 | 8/9 | 0% |
 
-### 波形调试 CSV（`ZMUSIC_WAVE_DUMP`）
+### 波形调试 CSV（`ZMUSE_WAVE_DUMP`）
 
-`ZMUSIC_WAVE_DUMP=/tmp/x.csv zmusic` 会把每个分析窗（32ms）写成一行，8 列：
+`ZMUSE_WAVE_DUMP=/tmp/x.csv zmuse` 会把每个分析窗（32ms）写成一行，8 列：
 
 | 列 | 含义 |
 |----|------|
@@ -241,7 +247,7 @@ col7 = 1 ⇔ x ≥ 0.995
 
 ## 6. 排查
 
-- `zmusic config --print` 看的是不是你以为的那个文件
+- `zmuse config --print` 看的是不是你以为的那个文件
 - 顶栏 `源 9/15` 表示 15 个源里 9 个可用；按 `R` 重新探测
 - 缺 key/侧车没起标「需凭据」，网络挂了标「离线」，两者不要混
 - 单个源搜不到，先用 `curl` 直接打接口确认服务在不在

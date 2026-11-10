@@ -214,13 +214,13 @@ pub struct EqFrame {
     pub peaks: Vec<f32>,
 }
 
-/// FIFO 放 $XDG_RUNTIME_DIR/zmusic（没有就退回 /tmp），比 /tmp 干净、随登录会话回收
+/// FIFO 放 $XDG_RUNTIME_DIR/zmuse（没有就退回 /tmp），比 /tmp 干净、随登录会话回收
 fn eq_dir() -> PathBuf {
     std::env::var("XDG_RUNTIME_DIR")
         .ok()
         .filter(|d| !d.is_empty())
-        .map(|d| PathBuf::from(d).join("zmusic"))
-        .unwrap_or_else(|| std::env::temp_dir().join("zmusic"))
+        .map(|d| PathBuf::from(d).join("zmuse"))
+        .unwrap_or_else(|| std::env::temp_dir().join("zmuse"))
 }
 
 /// 启动时清掉自己前缀的残留 FIFO（上次被 SIGKILL 之类留下的）
@@ -614,7 +614,7 @@ impl PcmAnalyzer {
                 let mut wagc = WaveAgc::new(wave_cfg, target_db);
                 let gain_cell = auto_gain_cell.clone();
                 // 调试用：把每窗幅度写成 CSV（ms,amp,rms_db），默认不写
-                let mut dump = std::env::var("ZMUSIC_WAVE_DUMP").ok().and_then(|p| {
+                let mut dump = std::env::var("ZMUSE_WAVE_DUMP").ok().and_then(|p| {
                     std::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
@@ -705,7 +705,7 @@ impl PcmAnalyzer {
                             if let Some(p90) = wagc.whole_p90() {
                                 *est_cell.lock().unwrap() = Some(p90);
                                 eprintln!(
-                                    "[zmusic] 整曲响度已缓存：p90 {:.1} dBFS（解码 {:.0}s）",
+                                    "[zmuse] 整曲响度已缓存：p90 {:.1} dBFS（解码 {:.0}s）",
                                     p90, wagc.played
                                 );
                             }

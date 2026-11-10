@@ -1,20 +1,20 @@
-name: zmusic
+name: zmuse
 arch: ${GOARCH}
 platform: linux
 version: ${VERSION}
 section: sound
 priority: optional
 maintainer: yuanjing <yuanjing@yuanjing.art>
-description: 网易云音乐终端播放器（Rust / ratatui TUI）
-homepage: https://github.com/yuanjingINT/zmusic
+description: Terminal NetEase Cloud Music player (Rust / ratatui TUI)
+homepage: https://github.com/yuanjingINT/zmuse
 license: GPL-3.0-only
 contents:
-  - src: target/release/zmusic
-    dst: /usr/bin/zmusic
+  - src: target/release/zmuse
+    dst: /usr/bin/zmuse
   - src: LICENSE
-    dst: /usr/share/licenses/zmusic/LICENSE
+    dst: /usr/share/licenses/zmuse/LICENSE
   - src: README.md
-    dst: /usr/share/doc/zmusic/README.md
+    dst: /usr/share/doc/zmuse/README.md
 
 # 与 PKGBUILD 的 depends / optdepends 对齐；各包格式的库名不同，用 overrides 分别给
 overrides:

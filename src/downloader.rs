@@ -361,7 +361,7 @@ mod tests {
     fn changing_quality_after_enqueue_affects_next_request() {
         let levels = Arc::new(Mutex::new(Vec::new()));
         let base = stub_api(levels.clone());
-        let dir = std::env::temp_dir().join(format!("zmusic-dl-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zmuse-dl-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let quality = Arc::new(RwLock::new("exhigh".to_string()));
         let dl = Downloader::new(dir, quality.clone(), base);

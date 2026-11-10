@@ -71,18 +71,18 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
           nfpm package -f packaging/nfpm.yaml -p deb \
-            -t "dist/zmusic_${version}_${{ matrix.pkgarch }}.deb"
+            -t "dist/zmuse_${version}_${{ matrix.pkgarch }}.deb"
           nfpm package -f packaging/nfpm.yaml -p rpm \
-            -t "dist/zmusic-${version}-1.${{ matrix.pkgarch }}.rpm"
+            -t "dist/zmuse-${version}-1.${{ matrix.pkgarch }}.rpm"
           nfpm package -f packaging/nfpm.yaml -p archlinux \
-            -t "dist/zmusic-${version}-1-${{ matrix.pkgarch }}.pkg.tar.zst"
+            -t "dist/zmuse-${version}-1-${{ matrix.pkgarch }}.pkg.tar.zst"
 
           ls -l dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zmusic-${{ matrix.pkgarch }}
+          name: zmuse-${{ matrix.pkgarch }}
           path: dist/*
           if-no-files-found: error
 

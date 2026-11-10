@@ -26,13 +26,13 @@ impl UsbDevice {
 }
 
 pub fn detect_usb() -> anyhow::Result<Vec<UsbDevice>> {
-    // 测试/无盘：设了 ZMUSIC_SUPERDL_DIR 就给一个「不会格式化」的合成条目，
+    // 测试/无盘：设了 ZMUSE_SUPERDL_DIR 就给一个「不会格式化」的合成条目，
     // 这样没有 U 盘也能从界面把超级下载跑到落盘（run_super_download 会跳过格式化）
-    if let Ok(dir) = std::env::var("ZMUSIC_SUPERDL_DIR") {
+    if let Ok(dir) = std::env::var("ZMUSE_SUPERDL_DIR") {
         let dir = dir.trim().to_string();
         if !dir.is_empty() {
             return Ok(vec![UsbDevice {
-                name: "ZMUSIC_SUPERDL_DIR".to_string(),
+                name: "ZMUSE_SUPERDL_DIR".to_string(),
                 size: free_space(&dir),
                 path: dir.clone(),
                 part: None,
@@ -261,7 +261,7 @@ fn mount_device<F: Fn(&str) -> (bool, String)>(target: &str, sudo_run: &F) -> Op
             }
         }
     }
-    let dir = "/mnt/zmusic";
+    let dir = "/mnt/zmuse";
     let _ = run(&format!("mkdir -p {}", dir));
     let (ok, _) = sudo_run(&format!("sudo mount {} {}", target, dir));
     if ok {
@@ -283,12 +283,12 @@ pub fn run_super_download<F: Fn(&str) -> (bool, String)>(
     };
     // 无盘/自动化场景：直接往指定目录下歌，跳过卸载与格式化（不碰任何设备）。
     // 没有可移动盘时也能验证「取流失败不写盘」这类行为。
-    if let Some(dir) = std::env::var("ZMUSIC_SUPERDL_DIR")
+    if let Some(dir) = std::env::var("ZMUSE_SUPERDL_DIR")
         .ok()
         .filter(|s| !s.trim().is_empty())
     {
         log(format!(
-            "==> ZMUSIC_SUPERDL_DIR={dir}，跳过格式化，直接写入该目录"
+            "==> ZMUSE_SUPERDL_DIR={dir}，跳过格式化，直接写入该目录"
         ));
         let _ = std::fs::create_dir_all(&dir);
         let client = NetEaseSource::new(api_base.to_string());
@@ -320,9 +320,9 @@ pub fn run_super_download<F: Fn(&str) -> (bool, String)>(
         target, fs
     ));
     let cmd = if fs == "FAT32" {
-        format!("sudo mkfs.vfat -F 32 -n ZMUSIC {}", target)
+        format!("sudo mkfs.vfat -F 32 -n ZMUSE {}", target)
     } else {
-        format!("sudo mkfs.exfat -n ZMUSIC {}", target)
+        format!("sudo mkfs.exfat -n ZMUSE {}", target)
     };
     let (ok, out) = sudo_run(&cmd);
     if !ok {

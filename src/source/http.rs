@@ -17,7 +17,7 @@ pub fn client() -> &'static Client {
             .connect_timeout(Duration::from_secs(2))
             .pool_max_idle_per_host(16)
             .tcp_nodelay(true)
-            .user_agent("zmusic/0.1 (+https://git.tuxai.org/personal/zmusic)")
+            .user_agent("zmuse/0.1 (+https://git.tuxai.org/personal/zmuse)")
             .build()
             .expect("构建 HTTP client 失败")
     })

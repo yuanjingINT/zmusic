@@ -1,4 +1,4 @@
-// zmusic 的 Meting 侧车：一个 GET /api 就够用。
+// zmuse 的 Meting 侧车：一个 GET /api 就够用。
 // 只监听 127.0.0.1，契约与 Meting-API 一致：
 //   /api?server=tencent&type=search&id=晴天&limit=10
 //   /api?server=tencent&type=url&id=<url_id>&br=320
@@ -10,12 +10,12 @@ const PORT = Number(process.env.METING_PORT || 8123);
 const HOST = '127.0.0.1';
 const SERVERS = new Set(['netease', 'tencent', 'kugou', 'baidu', 'kuwo']);
 
-// cookie 只从请求头（Rust 侧的 ZMUSIC_METING_COOKIE）或本机环境变量来，
+// cookie 只从请求头（Rust 侧的 ZMUSE_METING_COOKIE）或本机环境变量来，
 // 绝不写进仓库、绝不打印到日志。
 function cookieOf(req) {
   const h = req.headers['x-meting-cookie'];
   if (typeof h === 'string' && h.length < 8192) return h;
-  const env = process.env.METING_COOKIE || process.env.ZMUSIC_METING_COOKIE;
+  const env = process.env.METING_COOKIE || process.env.ZMUSE_METING_COOKIE;
   return env && env.length < 8192 ? env : '';
 }
 

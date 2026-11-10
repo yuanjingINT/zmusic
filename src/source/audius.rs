@@ -96,7 +96,7 @@ impl Source for AudiusSource {
 
     fn is_available(&self) -> bool {
         http::get_json(&format!(
-            "{}/v1/tracks/search?query=a&limit=1&app_name=zmusic",
+            "{}/v1/tracks/search?query=a&limit=1&app_name=zmuse",
             self.base
         ))
         .is_ok()
@@ -107,7 +107,7 @@ impl Source for AudiusSource {
             return Ok(SearchResult::default());
         }
         let v = http::get_json(&format!(
-            "{}/v1/tracks/search?query={}&limit={}&app_name=zmusic",
+            "{}/v1/tracks/search?query={}&limit={}&app_name=zmuse",
             self.base,
             http::enc(keyword),
             limit.clamp(1, 50)
@@ -124,7 +124,7 @@ impl Source for AudiusSource {
 
     fn stream_url(&self, id: &TrackId, _quality: &str) -> Result<Option<String>> {
         Ok(Some(format!(
-            "{}/v1/tracks/{}/stream?app_name=zmusic",
+            "{}/v1/tracks/{}/stream?app_name=zmuse",
             self.base,
             http::enc(id.as_str())
         )))

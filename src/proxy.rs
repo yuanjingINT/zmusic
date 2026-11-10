@@ -1,6 +1,6 @@
 //! 代理支持。
 //!
-//! 背景：YouTube 的 googlevideo 直链把签名绑到出口 IP，zmusic 和 mpv 必须走同一个出口。
+//! 背景：YouTube 的 googlevideo 直链把签名绑到出口 IP，zmuse 和 mpv 必须走同一个出口。
 //! yt-dlp 自己认 `--proxy socks5h://…`，但 mpv 的 `--http-proxy` 只支持 HTTP 代理，
 //! 所以这是给 mpv 用的最小桥：在本机起一个 HTTP CONNECT 代理，转发到配置里的 SOCKS5。
 

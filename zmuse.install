@@ -1,0 +1,30 @@
+# zmuse 的 alpm 钩子（PKGBUILD 里 install=zmuse.install）。
+#
+# 唯一要处理的是改名遗留：老版本给的是 meting-sidecar.service，从源码装的人还可能有一份
+# 用户级 unit 在 ~/.config/systemd/user/ 里——用户级 unit 不归 pacman 管，必须先停掉，
+# 否则它和新包里的 zmuse-meting.service 抢 8123 端口。
+post_install() {
+  cat <<'MSG'
+==> zmuse 装好了。想要 Meting 侧车（腾讯/酷狗/百度/酷我）就执行：
+      systemctl --user daemon-reload
+      systemctl --user enable --now zmuse-meting.service
+MSG
+  _zmuse_legacy_hint
+}
+
+post_upgrade() {
+  _zmuse_legacy_hint
+}
+
+_zmuse_legacy_hint() {
+  cat <<'MSG'
+==> 从 zmusic 改名而来：
+    · 配置已经自动迁移：~/.config/zmusic 复制了一份到 ~/.config/zmuse（旧目录保留）
+    · 旧包的 systemd 用户 unit（meting-sidecar.service）已随包删除；
+      如果你以前用源码脚本装过用户级 unit，请手动停掉，否则两个侧车会抢 8123 端口：
+        systemctl --user disable --now meting-sidecar.service
+        rm -f ~/.config/systemd/user/meting-sidecar.service
+        systemctl --user daemon-reload
+        systemctl --user enable --now zmuse-meting.service
+MSG
+}

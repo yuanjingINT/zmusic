@@ -1,11 +1,11 @@
-# zmusic
+# zmuse
 
 A terminal player for NetEase Cloud Music. Written in Rust with
 [ratatui](https://github.com/ratatui/ratatui): search, play and download from a
 keyboard-only TUI.
 
 - Playback goes through `mpv`, downloads go through the NetEase API
-- Defaults, favorites and settings all live in `~/.config/zmusic/`
+- Defaults, favorites and settings all live in `~/.config/zmuse/`
 - One binary, no Electron, no browser
 
 ```
@@ -18,6 +18,13 @@ keyboard-only TUI.
 
 The interface itself is still Chinese; the block above is what the screen looks
 like.
+
+> **Renamed from `zmusic`.** The project used to be called zmusic; the package,
+> binary and config directory are now `zmuse`. Your old setup keeps working: on
+> first start `~/.config/zmusic` is copied to `~/.config/zmuse` (the old
+> directory is left untouched), the cache is migrated the same way, and the old
+> `ZMUSIC_*` environment variables are still read — `ZMUSE_*` wins when both are
+> set. On Arch, `replaces=(zmusic)` makes `pacman -Syu` swap the old package.
 
 ## Requirements
 
@@ -51,14 +58,14 @@ and published to the self-hosted repo `repo.dito.asia`; both the packages and
 the database carry the repo key.
 
 > The repo currently holds the first stable release, **`0.1.1`** (`0.1.1-2`).
-> `0.1.1-1` was withdrawn — it crashed on first run when `~/.config/zmusic` did
+> `0.1.1-1` was withdrawn — it crashed on first run when `~/.config/zmuse` did
 > not exist yet — so `0.1.1-2` is the one to install.
 
 One-shot install (adds the repo, imports and locally trusts the key):
 
 ```bash
 curl -fsSL https://repo.dito.asia/install-dito-repo.sh | sudo bash
-sudo pacman -S zmusic
+sudo pacman -S zmuse
 ```
 
 Manual setup:
@@ -73,7 +80,7 @@ SigLevel = Required
 sudo pacman-key --add <(curl -fsSL https://repo.dito.asia/x86_64/dito-repo.pub)
 sudo pacman-key --lsign-key 6469F0BEB079C3EDCC47947627FEDD0D74F7D714
 sudo pacman -Sy
-sudo pacman -S zmusic
+sudo pacman -S zmuse
 ```
 
 > Repo key fingerprint `6469 F0BE B079 C3ED CC47 9476 27FE DD0D 74F7 D714`
@@ -86,8 +93,8 @@ sudo pacman -S zmusic
 
 Every `v*` tag triggers CI to build `.deb` / `.rpm` / Arch packages for x86_64
 and aarch64 and attach them to
-[GitLab Releases](https://git.tuxai.org/personal/zmusic/-/releases) (mirrored to
-[GitHub Releases](https://github.com/yuanjingINT/zmusic/releases)). Arch users
+[GitLab Releases](https://git.tuxai.org/personal/zmuse/-/releases) (mirrored to
+[GitHub Releases](https://github.com/yuanjingINT/zmuse/releases)). Arch users
 should prefer `dito-repo` above.
 
 ### From source
@@ -95,10 +102,10 @@ should prefer `dito-repo` above.
 The main repo is on GitLab; GitHub is a mirror:
 
 ```bash
-git clone https://git.tuxai.org/personal/zmusic.git
-cd zmusic
+git clone https://git.tuxai.org/personal/zmuse.git
+cd zmuse
 cargo build --release --locked
-./target/release/zmusic
+./target/release/zmuse
 ```
 
 Install the build dependencies first (missing OpenSSL headers show up as
@@ -119,11 +126,11 @@ sudo apt install build-essential pkg-config libssl-dev
 
 ## First run
 
-On the very first start zmusic opens a short setup wizard: interface language
+On the very first start zmuse opens a short setup wizard: interface language
 (Chinese / English), theme, waveform on/off, download folder and audio quality.
 Press `Enter` to move on or `Esc` to skip with the defaults; either way the
 answers are written to `config.toml` together with `first_run_done = true`, so
-upgrading users never see it again. Bring it back with `zmusic config --wizard`.
+upgrading users never see it again. Bring it back with `zmuse config --wizard`.
 
 The language choice is real, not just a stored string: menus, titles, the
 settings screen, hints, toasts and error messages switch with it, and the wizard
@@ -136,21 +143,21 @@ The player ships without an API; you need a local NetEase API service:
 ./setup.sh update   # update the API to the latest version and restart
 ```
 
-> If zmusic was installed from the pacman package, `setup.sh` notices that the
+> If zmuse was installed from the pacman package, `setup.sh` notices that the
 > sidecar comes with the package
-> (`pacman -Qo /usr/lib/zmusic/sidecar/meting.js` succeeds) and **skips the
+> (`pacman -Qo /usr/lib/zmuse/sidecar/meting.js` succeeds) and **skips the
 > source sidecar install**: it will not copy an old tree into
-> `~/.local/share/zmusic/meting` and will not write a user-level unit (a
+> `~/.local/share/zmuse/meting` and will not write a user-level unit (a
 > user-level unit shadows the packaged `meting-sidecar.service`, which means
 > running stale code without `type=duration`). If it finds a leftover user-level
 > unit it only tells you how to back it up and restart — it will not delete
 > anything for you.
 
-The launcher `install.sh` generates (`~/.local/bin/zmusic` → `run.sh` in the
+The launcher `install.sh` generates (`~/.local/bin/zmuse` → `run.sh` in the
 repo) **never touches the network**: it only does three things — incremental
 `cargo build --release` when the binary is older than the sources,
 `systemctl --user start ncm-api` when the API is not running, then
-`exec target/release/zmusic`. That is why the menu opens instantly.
+`exec target/release/zmuse`. That is why the menu opens instantly.
 
 Update the API by hand when you want to (it is no longer on the startup path):
 
@@ -161,14 +168,14 @@ Update the API by hand when you want to (it is no longer on the startup path):
 ## Configuration
 
 All service and account settings live in one file:
-`~/.config/zmusic/config.toml`. Most of them can be changed without touching
+`~/.config/zmuse/config.toml`. Most of them can be changed without touching
 TOML:
 
 ```bash
-zmusic config            # interactive settings screen (j/k, h/l, Enter; s saves, q saves & quits)
-zmusic config --edit     # open the raw file in $EDITOR
-zmusic config --print    # print the path only
-zmusic config --wizard   # re-run the first-run wizard
+zmuse config            # interactive settings screen (j/k, h/l, Enter; s saves, q saves & quits)
+zmuse config --edit     # open the raw file in $EDITOR
+zmuse config --print    # print the path only
+zmuse config --wizard   # re-run the first-run wizard
 ```
 
 The settings screen covers theme, waveform on/off, spacing and padding,
@@ -187,18 +194,18 @@ Environment variables still work, and win over the file:
 | `NCM_API` | `http://127.0.0.1:3000` | NetEase API address |
 | `NCM_DIR` | `~/Music/ncm` | download directory |
 | `NCM_QUALITY` | `exhigh` | quality: `standard` / `higher` / `exhigh` / `lossless` / `hires` |
-| `ZMUSIC_PROXY` | empty | optional proxy, e.g. `socks5h://127.0.0.1:11080`; required for YouTube / SoundCloud, see below |
-| `ZMUSIC_METING_URL` | `http://127.0.0.1:8123` | Meting sidecar address (Tencent / Kugou / Baidu / Kuwo) |
-| `ZMUSIC_METING_COOKIE` | empty | optional platform cookie used by Meting to fetch streams (prefer `[meting] cookie` in config.toml); never written to disk or logs |
-| `ZMUSIC_YTDLP_BIN` | `yt-dlp` | yt-dlp executable name or absolute path |
-| `ZMUSIC_SUPERDL_DIR` | empty | when set, **super download** writes straight into this directory and skips disk picking / unmounting / formatting (handy for testing without a USB stick) |
-| `ZMUSIC_WAVE_DUMP` | empty | debug: write every analysis window as CSV (columns in docs/CONFIG.md section 5); leave it off normally |
+| `ZMUSE_PROXY` | empty | optional proxy, e.g. `socks5h://127.0.0.1:11080`; required for YouTube / SoundCloud, see below |
+| `ZMUSE_METING_URL` | `http://127.0.0.1:8123` | Meting sidecar address (Tencent / Kugou / Baidu / Kuwo) |
+| `ZMUSE_METING_COOKIE` | empty | optional platform cookie used by Meting to fetch streams (prefer `[meting] cookie` in config.toml); never written to disk or logs |
+| `ZMUSE_YTDLP_BIN` | `yt-dlp` | yt-dlp executable name or absolute path |
+| `ZMUSE_SUPERDL_DIR` | empty | when set, **super download** writes straight into this directory and skips disk picking / unmounting / formatting (handy for testing without a USB stick) |
+| `ZMUSE_WAVE_DUMP` | empty | debug: write every analysis window as CSV (columns in docs/CONFIG.md section 5); leave it off normally |
 
 At runtime it writes:
 
 ```
-~/.config/zmusic/favorites.json   favorites
-~/.config/zmusic/settings.json    UI and playback settings
+~/.config/zmuse/favorites.json   favorites
+~/.config/zmuse/settings.json    UI and playback settings
 ```
 
 ### Sources at a glance
@@ -220,7 +227,7 @@ guessing.
 | Audius | `audius` | public/free | search + streaming work |
 | ccMixter | `ccmixter` | public/free | search works; direct audio links are 403 from the site, so it degrades to "not playable" at runtime |
 | Wikimedia Commons | `wikimedia` | public/free | resolves IPv6 only, degrades on slow networks |
-| Jamendo | `jamendo` | public/free | needs `ZMUSIC_JAMENDO_CLIENT_ID`, greyed out otherwise |
+| Jamendo | `jamendo` | public/free | needs `ZMUSE_JAMENDO_CLIENT_ID`, greyed out otherwise |
 | OpenGameArt | `opengameart` | public/free | scrapes the page, single tracks only |
 
 Not integrated (each with the reason we measured):
@@ -238,7 +245,7 @@ Not integrated (each with the reason we measured):
 
 ### Probing and aggregation
 
-On startup zmusic probes every source concurrently in the background (4 at a
+On startup zmuse probes every source concurrently in the background (4 at a
 time, one minimal request each). It **stays off the render / key path**, so the
 UI never waits for probing. The top bar shows `探测中 3/15` while probing and
 `源 9/15` afterwards.
@@ -316,16 +323,16 @@ directly from China; they need a proxy**:
 ```bash
 # example: borrow an overseas box for a SOCKS5 tunnel
 ssh -f -N -D 127.0.0.1:11080 your-vps
-ZMUSIC_PROXY=socks5h://127.0.0.1:11080 zmusic
+ZMUSE_PROXY=socks5h://127.0.0.1:11080 zmuse
 ```
 
-The hard constraint: **zmusic and mpv must leave through the same IP**.
+The hard constraint: **zmuse and mpv must leave through the same IP**.
 googlevideo binds the signature to the exit IP, so switching IPs yields 403. In
 practice:
 
 - `yt-dlp` is passed `--proxy` directly
 - mpv's `--http-proxy` only understands HTTP proxies, not SOCKS; so when the
-  proxy is `socks5(h)://`, zmusic starts a small local bridge (HTTP CONNECT →
+  proxy is `socks5(h)://`, zmuse starts a small local bridge (HTTP CONNECT →
   SOCKS5) listening on `127.0.0.1` only, used for tracks from `youtube` /
   `soundcloud`; for other sources it is cleared again and playback goes direct
 - with an `http://…` proxy it is handed to mpv as-is and no bridge is started
@@ -338,7 +345,7 @@ are **not** cached (they expire).
 Smoke test (runs the real `yt-dlp`, ignored by default):
 
 ```bash
-ZMUSIC_LIVE_PROXY=socks5h://127.0.0.1:11080 cargo test --release ytdlp_live -- --ignored --nocapture
+ZMUSE_LIVE_PROXY=socks5h://127.0.0.1:11080 cargo test --release ytdlp_live -- --ignored --nocapture
 ```
 
 ### Meting sidecar (Tencent / Kugou / Baidu / Kuwo)
@@ -351,7 +358,7 @@ cd sidecar && npm i && node meting.js        # or run ./setup.sh from the repo r
 ```
 
 On the Rust side they register as four sources: `QQ 音乐 (Meting)` /
-`酷狗 (Meting)` / `千千/百度 (Meting)` / `酷我 (Meting)`. `ZMUSIC_METING_URL`
+`酷狗 (Meting)` / `千千/百度 (Meting)` / `酷我 (Meting)`. `ZMUSE_METING_URL`
 changes the address (default `http://127.0.0.1:8123`). If the sidecar is not
 running or cannot be installed, this whole group is greyed out and NetEase and
 the other sources are unaffected. QQ also has a direct source
@@ -366,16 +373,16 @@ systemctl --user enable --now meting-sidecar.service
 #### Optional: cookie (for member / restricted tracks)
 
 Searching tencent/kugou needs no login, but many tracks need a platform cookie to
-stream. zmusic only accepts a cookie from **environment variables**
-(`ZMUSIC_METING_COOKIE`, or the sidecar's own `METING_COOKIE`); it never writes
+stream. zmuse only accepts a cookie from **environment variables**
+(`ZMUSE_METING_COOKIE`, or the sidecar's own `METING_COOKIE`); it never writes
 it to disk or into logs:
 
 ```bash
 # temporary (current shell)
-export ZMUSIC_METING_COOKIE='uin=o0123456; qm_keyst=...'
+export ZMUSE_METING_COOKIE='uin=o0123456; qm_keyst=...'
 # persistent: a 0600 env file read by systemd (the unit already sets EnvironmentFile)
-mkdir -p ~/.config/zmusic && install -m 600 /dev/null ~/.config/zmusic/meting.env
-printf 'METING_COOKIE=%s\n' 'uin=...; qm_keyst=...' > ~/.config/zmusic/meting.env
+mkdir -p ~/.config/zmuse && install -m 600 /dev/null ~/.config/zmuse/meting.env
+printf 'METING_COOKIE=%s\n' 'uin=...; qm_keyst=...' > ~/.config/zmuse/meting.env
 systemctl --user restart meting-sidecar
 ```
 
@@ -386,7 +393,7 @@ and never commit it.
 
 #### Equalizer (real audio)
 
-The waveform on the now-playing screen comes from the **actual audio**: zmusic
+The waveform on the now-playing screen comes from the **actual audio**: zmuse
 starts a hidden mpv process that decodes the same track with `--ao=pcm` into an
 8 kHz mono PCM FIFO, consumes it at real-time pace, and draws a symmetric braille
 waveform (2×4 dots per character cell, solid fill). Columns whose amplitude is
@@ -418,8 +425,8 @@ Settings:
 | `[ui] wave_spacing` | `2` | gap between waveform rows: 1 dense / 2 default / 3 airy |
 | `[ui] wave_vpad` | `1` | blank rows above and below the waveform |
 
-`ZMUSIC_EQ_REF_DBFS` / `ZMUSIC_EQ_GAIN` / `ZMUSIC_EQ_SOFT_CLIP` /
-`ZMUSIC_EQ_AUTOGAIN` / `ZMUSIC_EQ_FPS` override these temporarily (see
+`ZMUSE_EQ_REF_DBFS` / `ZMUSE_EQ_GAIN` / `ZMUSE_EQ_SOFT_CLIP` /
+`ZMUSE_EQ_AUTOGAIN` / `ZMUSE_EQ_FPS` override these temporarily (see
 docs/CONFIG.md section 5 for the real values and how to measure them).
 
 #### Super download
@@ -429,7 +436,7 @@ then writes the charts onto it. Failure handling: when `/song/url/v1` returns
 `code!=200` or no playable stream (member tracks, unlicensed tracks, dead
 third-party fallbacks), it **skips the track and continues with the next one**,
 writes nothing and leaves no `.part` files; the log marks it
-`跳过(无播放链接)`. Setting `ZMUSIC_SUPERDL_DIR=<dir>` skips formatting and
+`跳过(无播放链接)`. Setting `ZMUSE_SUPERDL_DIR=<dir>` skips formatting and
 writes into that directory instead, which is how this path is tested without a
 USB stick.
 
@@ -494,7 +501,7 @@ involved:
 
 ```bash
 makepkg -s           # needs base-devel + openssl (declared in PKGBUILD)
-# output: zmusic-<ver>-<rel>-x86_64.pkg.tar.zst; the release script signs and adds it
+# output: zmuse-<ver>-<rel>-x86_64.pkg.tar.zst; the release script signs and adds it
 ```
 
 Two hard rules for releases:
@@ -518,7 +525,7 @@ users, on push / PR / tag:
 
 | Version | Changes |
 |---------|---------|
-| 0.1.1 | First stable release. Startup 243 ms → 125 ms (2.05 MB binary); braille waveform driven by the real audio, no flat-topping, adjustable spacing and padding; per-track automatic gain (measured on the first play, applied from the second, zero extra traffic); first-run wizard and Chinese/English UI; interactive `zmusic config`; fixes: NetEase single-source could not open album/playlist/artist details, the waveform decoder re-downloaded the whole track at the end of a song (+50% traffic), unplayable search results failed silently. `0.1.1-1` withdrawn (crashed on first run with no `~/.config/zmusic`) |
+| 0.1.1 | First stable release. Startup 243 ms → 125 ms (2.05 MB binary); braille waveform driven by the real audio, no flat-topping, adjustable spacing and padding; per-track automatic gain (measured on the first play, applied from the second, zero extra traffic); first-run wizard and Chinese/English UI; interactive `zmuse config`; fixes: NetEase single-source could not open album/playlist/artist details, the waveform decoder re-downloaded the whole track at the end of a song (+50% traffic), unplayable search results failed silently. `0.1.1-1` withdrawn (crashed on first run with no `~/.config/zmuse`) |
 | 0.1.1beta2 | Fix auto-advance switching tracks without sound: with keep-open mpv ends paused, so auto-advance now unpauses explicitly; manual track changes and quality switches keep the previous paused state |
 | 0.1.1beta1 | Per-screen hint bar; `i` opens the current-track popup (favorite / download / quality / play order); auto-advance when a track ends (sequential / shuffle / repeat-one); download quality follows the runtime setting |
 | 0.1.0-2 | License changed to GPL-3.0, dependency fixes (`openssl` required, `mpv` / `nodejs` optional), TLS switched to native-tls |
@@ -531,7 +538,7 @@ users, on push / PR / tag:
 ### End-to-end play script (development)
 
 ```bash
-# start zmusic inside a tmux session first, then:
+# start zmuse inside a tmux session first, then:
 scripts/play-e2e.sh <session> '晴天 周杰伦' 40
 ```
 

@@ -1,10 +1,14 @@
 # Maintainer: yuanjing <yuanjing@yuanjing.art>
-pkgname=zmusic
+pkgname=zmuse
 pkgver=0.1.1
 pkgrel=2
+# 从 zmusic 改名过来：老用户 -Syu 时自动替换旧包（replaces），并申明两者不能共存
+replaces=('zmusic')
+conflicts=('zmusic')
 pkgdesc="Terminal NetEase Cloud Music player (Rust / ratatui TUI)"
 arch=('x86_64' 'aarch64')
-url="https://git.tuxai.org/personal/zmusic"
+install=zmuse.install
+url="https://git.tuxai.org/personal/zmuse"
 license=('GPL-3.0-only')
 depends=('gcc-libs' 'openssl')
 makedepends=('cargo' 'rust')
@@ -24,13 +28,13 @@ build() {
   cd "$srcdir/$pkgname-$_commit"
   export CARGO_HOME="$srcdir/cargo-home"
   # 构建可复现：别把家目录/构建目录的绝对路径嵌进二进制（panic 的 Location::file 会带）
-  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build/zmusic --remap-path-prefix=$HOME=/build/home"
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build/zmuse --remap-path-prefix=$HOME=/build/home"
   cargo build --release --locked
 }
 
 package() {
   cd "$srcdir/$pkgname-$_commit"
-  install -Dm755 target/release/zmusic "$pkgdir/usr/bin/zmusic"
+  install -Dm755 target/release/zmuse "$pkgdir/usr/bin/zmuse"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 docs/CONFIG.md "$pkgdir/usr/share/doc/$pkgname/CONFIG.md"
@@ -42,7 +46,7 @@ package() {
   find "$pkgdir/usr/lib/$pkgname/sidecar" -name '*.js' -exec chmod 644 {} +
   chmod 755 "$pkgdir/usr/lib/$pkgname/sidecar"
 
-  # systemd user unit（可选启用：systemctl --user enable --now meting-sidecar）
-  install -Dm644 packaging/meting-sidecar.service \
-    "$pkgdir/usr/lib/systemd/user/meting-sidecar.service"
+  # systemd user unit（可选启用：systemctl --user enable --now zmuse-meting）
+  install -Dm644 packaging/zmuse-meting.service \
+    "$pkgdir/usr/lib/systemd/user/zmuse-meting.service"
 }

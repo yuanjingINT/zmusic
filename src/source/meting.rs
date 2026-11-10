@@ -13,7 +13,7 @@ pub struct MetingSource {
     server: &'static str,
     id_str: &'static str,
     label: &'static str,
-    /// 平台 cookie（config.toml 的 `[meting] cookie`，或 ZMUSIC_METING_COOKIE）
+    /// 平台 cookie（config.toml 的 `[meting] cookie`，或 ZMUSE_METING_COOKIE）
     cookie: Option<String>,
 }
 

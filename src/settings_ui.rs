@@ -1,8 +1,8 @@
-//! `zmusic config` 的交互设置界面：选外观、开关波形、改下载目录。
+//! `zmuse config` 的交互设置界面：选外观、开关波形、改下载目录。
 //!
 //! 设计取向：用户要的是「选样式」，不是「编辑一个 TOML」。所以这里是一屏可键盘
-//! 操作的设置列表，改完按 s 写回 `~/.config/zmusic/config.toml` 的 `[general]` /
-//! `[ui]`；想直接编辑文件仍可用 `zmusic config --edit`。
+//! 操作的设置列表，改完按 s 写回 `~/.config/zmuse/config.toml` 的 `[general]` /
+//! `[ui]`；想直接编辑文件仍可用 `zmuse config --edit`。
 
 use crate::config::Config;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -76,7 +76,7 @@ const QUALITIES: [&str; 5] = ["standard", "higher", "exhigh", "lossless", "hires
 
 impl State {
     fn from_cfg(cfg: &Config) -> Self {
-        let theme = match std::env::var("ZMUSIC_THEME").as_deref() {
+        let theme = match std::env::var("ZMUSE_THEME").as_deref() {
             Ok("mono") => 1,
             _ => 0,
         };
@@ -93,7 +93,7 @@ impl State {
             animations: cfg.animations.animations,
             spinner: cfg.animations.spinner,
             download_dir: cfg.download_dir.display().to_string(),
-            superdl_dir: std::env::var("ZMUSIC_SUPERDL_DIR").unwrap_or_default(),
+            superdl_dir: std::env::var("ZMUSE_SUPERDL_DIR").unwrap_or_default(),
             quality,
             editing: None,
             dirty: false,

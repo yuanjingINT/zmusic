@@ -1,15 +1,15 @@
 [Unit]
-Description=Meting sidecar for zmusic (loopback only)
-Documentation=https://git.tuxai.org/personal/zmusic
+Description=Meting sidecar for zmuse (loopback only)
+Documentation=https://git.tuxai.org/personal/zmuse
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/usr/lib/zmusic/sidecar
+WorkingDirectory=/usr/lib/zmuse/sidecar
 Environment=METING_PORT=8123
 # 可选：把 cookie 放在这个文件里（600），别写进 unit 正文或仓库
-EnvironmentFile=-%h/.config/zmusic/meting.env
+EnvironmentFile=-%h/.config/zmuse/meting.env
 ExecStart=/usr/bin/node meting.js
 Restart=on-failure
 RestartSec=3

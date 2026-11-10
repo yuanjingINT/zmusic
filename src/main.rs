@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Some("-V") | Some("--version") => {
-            println!("zmusic {}", env!("CARGO_PKG_VERSION"));
+            println!("zmuse {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Some(other) => {
@@ -94,21 +94,21 @@ fn main() -> anyhow::Result<()> {
 
 fn print_help() {
     println!(
-        "zmusic - 网易云/多源 终端音乐播放器\n\
+        "zmuse - 网易云/多源 终端音乐播放器\n\
          \n\
          用法:\n\
-         \x20 zmusic            启动播放器\n\
-         \x20 zmusic config     打开设置界面（外观/波形/下载目录）\n\
-         \x20 zmusic config --edit   直接用 $EDITOR 编辑 config.toml\n\
-         \x20 zmusic config --wizard 重新走一遍首次设置向导\n\
-         \x20 zmusic config --print  只打印配置文件路径\n\
-         \x20 zmusic --help / -V\n\
+         \x20 zmuse            启动播放器\n\
+         \x20 zmuse config     打开设置界面（外观/波形/下载目录）\n\
+         \x20 zmuse config --edit   直接用 $EDITOR 编辑 config.toml\n\
+         \x20 zmuse config --wizard 重新走一遍首次设置向导\n\
+         \x20 zmuse config --print  只打印配置文件路径\n\
+         \x20 zmuse --help / -V\n\
          \n\
          配置说明见 docs/CONFIG.md"
     );
 }
 
-/// `zmusic config`：默认打开交互设置界面；
+/// `zmuse config`：默认打开交互设置界面；
 /// `--print` 只打印路径；`--edit` 用 $EDITOR 直接编辑文件。
 fn config_cli(rest: &[String]) -> anyhow::Result<()> {
     let cfg = config::Config::load();

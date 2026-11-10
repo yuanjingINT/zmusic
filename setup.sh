@@ -172,10 +172,11 @@ wait_ready() {
     return 1
 }
 
-METING_DIR="$HOME/.local/share/zmusic/meting"
+METING_DIR="$HOME/.local/share/zmuse/meting"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)/sidecar"
-PKG_SIDECAR_DIR="${PKG_SIDECAR_DIR:-/usr/lib/zmusic/sidecar}"
-USER_UNIT="$HOME/.config/systemd/user/meting-sidecar.service"
+PKG_SIDECAR_DIR="${PKG_SIDECAR_DIR:-/usr/lib/zmuse/sidecar}"
+USER_UNIT="$HOME/.config/systemd/user/zmuse-meting.service"
+LEGACY_UNIT="$HOME/.config/systemd/user/meting-sidecar.service"
 
 # 侧车是不是由 pacman 包提供（包里的更新，绝不能被源码副本盖住）
 pkg_sidecar_installed() {
@@ -183,8 +184,19 @@ pkg_sidecar_installed() {
         pacman -Qo "$PKG_SIDECAR_DIR/meting.js" >/dev/null 2>&1
 }
 
+# 改名遗留：老版本的用户级 unit 叫 meting-sidecar.service，它不归 pacman 管，
+# 不停掉就会和新 unit 抢 8123 端口。
+cleanup_legacy_unit() {
+    [ -f "$LEGACY_UNIT" ] || return 0
+    echo "==> 发现改名前的旧 unit：$LEGACY_UNIT"
+    systemctl --user disable --now meting-sidecar.service >/dev/null 2>&1 || true
+    mv "$LEGACY_UNIT" "$LEGACY_UNIT.bak-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    echo "    已停用并备份（不删原文件），改为启用 zmuse-meting.service"
+}
+
 install_meting() {
-    # Meting 侧车：覆盖腾讯/酷狗/百度/酷我。没起或装不上时，zmusic 里那组源自动置灰。
+    # Meting 侧车：覆盖腾讯/酷狗/百度/酷我。没起或装不上时，zmuse 里那组源自动置灰。
     command -v node >/dev/null || { echo "!! 没有 node，跳过 Meting 侧车"; return 0; }
 
     if pkg_sidecar_installed; then
@@ -192,13 +204,13 @@ install_meting() {
         echo "==> Meting 侧车由软件包提供（$PKG_SIDECAR_DIR），跳过源码安装"
         if [ -f "$USER_UNIT" ]; then
             echo "!! 发现旧用户级 unit：$USER_UNIT"
-            echo "   它会遮蔽包内 unit，跑的是旧的 ~/.local/share/zmusic/meting（没有 type=duration）。"
+            echo "   它会遮蔽包内 unit，跑的是旧的 ~/.local/share/zmuse/meting（没有 type=duration）。"
             echo "   建议处理："
             echo "     mv \"$USER_UNIT\" \"$USER_UNIT.bak-$(date +%Y%m%d)\""
-            echo "     systemctl --user daemon-reload && systemctl --user restart meting-sidecar"
+            echo "     systemctl --user daemon-reload && systemctl --user restart zmuse-meting"
         fi
         systemctl --user daemon-reload >/dev/null 2>&1 || true
-        systemctl --user enable --now meting-sidecar.service >/dev/null 2>&1 || true
+        systemctl --user enable --now zmuse-meting.service >/dev/null 2>&1 || true
         return 0
     fi
 
@@ -211,7 +223,7 @@ install_meting() {
     mkdir -p "$HOME/.config/systemd/user"
     cat > "$USER_UNIT" <<UNIT
 [Unit]
-Description=Meting sidecar for zmusic (loopback only)
+Description=Meting sidecar for zmuse (loopback only)
 After=network-online.target
 Wants=network-online.target
 
@@ -227,10 +239,11 @@ RestartSec=3
 WantedBy=default.target
 UNIT
     systemctl --user daemon-reload
-    systemctl --user enable --now meting-sidecar.service >/dev/null 2>&1 || true
+    systemctl --user enable --now zmuse-meting.service >/dev/null 2>&1 || true
 }
 
 install_api
+cleanup_legacy_unit
 install_meting
 write_service
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 启动 zmusic：不联网、不重启服务、不做无谓构建
+# 启动 zmuse：不联网、不重启服务、不做无谓构建
 #   1) 二进制不存在或比源码旧 → 增量 cargo build（不用 cargo run，省掉每次的构建检查）
 #   2) ncm-api 用户服务没跑 → 拉起来；已经在跑就完全不动它
 #   3) exec 播放器
@@ -7,8 +7,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-BIN="$ROOT/target/release/zmusic"
-SERVICE="${ZMUSIC_API_SERVICE:-ncm-api}"
+BIN="$ROOT/target/release/zmuse"
+SERVICE="${ZMUSE_API_SERVICE:-ncm-api}"
 
 needs_build() {
   [[ ! -x "$BIN" ]] && return 0
@@ -19,7 +19,7 @@ needs_build() {
 }
 
 if needs_build; then
-  echo "[zmusic] 源码比二进制新，增量构建中…" >&2
+  echo "[zmuse] 源码比二进制新，增量构建中…" >&2
   ( cd "$ROOT" && cargo build --release )
 fi
 
@@ -27,9 +27,9 @@ fi
 if command -v systemctl >/dev/null 2>&1; then
   if ! systemctl --user is-active --quiet "$SERVICE" 2>/dev/null; then
     if systemctl --user start "$SERVICE" 2>/dev/null; then
-      echo "[zmusic] 已启动 $SERVICE" >&2
+      echo "[zmuse] 已启动 $SERVICE" >&2
     else
-      echo "[zmusic] $SERVICE 启动失败，网易云相关功能可能不可用" >&2
+      echo "[zmuse] $SERVICE 启动失败，网易云相关功能可能不可用" >&2
     fi
   fi
 fi

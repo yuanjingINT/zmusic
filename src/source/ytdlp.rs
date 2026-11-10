@@ -468,12 +468,12 @@ not-json-line
     }
 
     /// 真跑 yt-dlp 的冒烟测试（默认 ignore，需要出口）：
-    /// `ZMUSIC_LIVE_PROXY=socks5h://127.0.0.1:11081 cargo test --release ytdlp_live -- --ignored --nocapture`
+    /// `ZMUSE_LIVE_PROXY=socks5h://127.0.0.1:11081 cargo test --release ytdlp_live -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn ytdlp_live_search_and_stream() {
-        let Ok(proxy) = std::env::var("ZMUSIC_LIVE_PROXY") else {
-            eprintln!("跳过：没有设置 ZMUSIC_LIVE_PROXY");
+        let Ok(proxy) = std::env::var("ZMUSE_LIVE_PROXY") else {
+            eprintln!("跳过：没有设置 ZMUSE_LIVE_PROXY");
             return;
         };
         for site in [Site::YouTube, Site::SoundCloud] {

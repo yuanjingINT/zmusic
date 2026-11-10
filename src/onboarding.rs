@@ -2,7 +2,7 @@
 //!
 //! 只在第一次运行（`config.toml` 里没有 `first_run_done = true`）出现；
 //! 升级不会再弹——判据是配置文件里的标记，不是「有没有配置文件」。
-//! 想重跑：`zmusic config --wizard`，或删掉 config.toml 里那行标记。
+//! 想重跑：`zmuse config --wizard`，或删掉 config.toml 里那行标记。
 
 use crate::config::Config;
 use crate::i18n::{self, Lang};
@@ -182,7 +182,7 @@ fn finish(cfg: &Config, st: &State) -> anyhow::Result<()> {
     if let Some(dir) = std::path::Path::new(&st.dir).parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    // 配置文件自己的父目录也要建：全新安装时 ~/.config/zmusic 根本不存在，
+    // 配置文件自己的父目录也要建：全新安装时 ~/.config/zmuse 根本不存在，
     // 之前漏了这一句，导致首次向导一结束就 `No such file or directory` 退出。
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

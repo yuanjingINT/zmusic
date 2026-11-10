@@ -1,5 +1,5 @@
 {
-  "name": "zmusic-meting-sidecar",
+  "name": "zmuse-meting-sidecar",
   "private": true,
   "type": "module",
   "dependencies": {

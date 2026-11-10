@@ -257,7 +257,7 @@ pub struct App {
     eq_seg: usize,
     /// 哪一代播放已经「唱完」了：这一代内不再重建解码器（防止歌尾重拉整首）
     eq_done_gen: Option<u64>,
-    /// 逐曲响度缓存：歌曲 key → p90 dB（存 ~/.cache/zmusic/eq_gain.json）
+    /// 逐曲响度缓存：歌曲 key → p90 dB（存 ~/.cache/zmuse/eq_gain.json）
     eq_cache: std::collections::HashMap<String, f32>,
     /// 缓存是否已从磁盘读过
     eq_cache_loaded: bool,
@@ -611,7 +611,7 @@ impl App {
         let _ = execute!(out, LeaveAlternateScreen, Show);
         let _ = disable_raw_mode();
         let _ = out.flush();
-        let _ = writeln!(out, "\n[zmusic] 正在执行: {}", cmd);
+        let _ = writeln!(out, "\n[zmuse] 正在执行: {}", cmd);
         let _ = out.flush();
         let status = std::process::Command::new("sh").args(["-c", cmd]).status();
         let _ = enable_raw_mode();
@@ -790,9 +790,13 @@ impl App {
 
     /// 真频谱解码器的生命周期：只在「正在播放页 + 真在播放 + pcm 档」时存在，
     /// 切页/暂停/停止立刻 drop（Drop 里 kill 子进程、删 FIFO，不留孤儿）。
-    /// 逐曲响度缓存文件：~/.cache/zmusic/eq_gain.json
+    /// 逐曲响度缓存文件：~/.cache/zmuse/eq_gain.json
     fn eq_cache_path() -> Option<std::path::PathBuf> {
-        dirs::cache_dir().map(|d| d.join("zmusic").join("eq_gain.json"))
+        let base = dirs::cache_dir()?;
+        let dir = base.join("zmuse");
+        // 改名兼容：老的 ~/.cache/zmusic 抄一份过来（响度缓存没了也只是第一遍重估）
+        crate::config::migrate_dir(&dir, &base.join(crate::config::LEGACY_DIR_NAME));
+        Some(dir.join("eq_gain.json"))
     }
 
     fn ensure_eq_cache(&mut self) {

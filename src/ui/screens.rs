@@ -206,7 +206,7 @@ fn render_ctx_menu(f: &mut Frame, app: &mut App) {
 
 fn render_top(f: &mut Frame, area: Rect, app: &mut App) {
     let mut spans = Vec::with_capacity(4);
-    spans.push(Span::styled(" zmusic · ", theme::title()));
+    spans.push(Span::styled(" zmuse · ", theme::title()));
     spans.push(Span::styled(app.screen.name(), theme::title()));
     if let Some(st) = app.probe_status() {
         spans.push(Span::styled("   ", theme::dim()));

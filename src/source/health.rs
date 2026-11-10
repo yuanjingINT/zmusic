@@ -37,12 +37,12 @@ impl SourceState {
 
 /// 错误文本 → 状态。缺 key / 侧车没起归 `NeedsCreds`，其余统一 `Down`。
 ///
-/// 这些字符串来自各 adapter 的报错（`Jamendo 需要 ZMUSIC_JAMENDO_CLIENT_ID`、
+/// 这些字符串来自各 adapter 的报错（`Jamendo 需要 ZMUSE_JAMENDO_CLIENT_ID`、
 /// `meting 侧车未启动` 等），改文案时记得同步这里；匹配不到就按 `Down` 处理，宁严不宽。
 pub fn classify_error(msg: &str) -> SourceState {
     let m = msg.to_ascii_lowercase();
     let needs = [
-        "需要 zmusic_jamendo_client_id",
+        "需要 zmuse_jamendo_client_id",
         "client_id",
         "侧车",
         "sidecar",
@@ -76,7 +76,7 @@ pub fn probe_one(src: &dyn Source) -> SourceState {
 /// 本地已知的「缺凭据」判据：只有确实要 key 的源才这么标
 pub fn needs_creds_hint(id: &str) -> bool {
     match id {
-        "jamendo" => std::env::var("ZMUSIC_JAMENDO_CLIENT_ID").is_err(),
+        "jamendo" => std::env::var("ZMUSE_JAMENDO_CLIENT_ID").is_err(),
         _ if id.starts_with("meting:") => true, // 侧车没起 / 需要 cookie
         _ => false,
     }
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn classifies_errors_into_creds_vs_down() {
         assert_eq!(
-            classify_error("Jamendo 需要 ZMUSIC_JAMENDO_CLIENT_ID"),
+            classify_error("Jamendo 需要 ZMUSE_JAMENDO_CLIENT_ID"),
             SourceState::NeedsCreds
         );
         assert_eq!(

@@ -124,7 +124,7 @@ pub fn t(key: &str) -> &'static str {
         ("wizard.quality", true) => "Audio quality",
         ("wizard.next", false) => "Enter 下一步   Esc 用默认值跳过",
         ("wizard.next", true) => "Enter next   Esc skip with defaults",
-        ("wizard.done", false) => "完成！按 Enter 进入 zmusic",
+        ("wizard.done", false) => "完成！按 Enter 进入 zmuse",
         ("wizard.done", true) => "Done! Press Enter to start",
         // 设置页
         ("set.title", false) => "设置",

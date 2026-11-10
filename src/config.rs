@@ -1,4 +1,4 @@
-//! 统一配置：`~/.config/zmusic/config.toml`，环境变量仍可覆盖（向后兼容）。
+//! 统一配置：`~/.config/zmuse/config.toml`，环境变量仍可覆盖（向后兼容）。
 //!
 //! 优先级：环境变量 > config.toml > 内置默认值。
 //! 只有「服务/账号类」配置放这里；UI 偏好（播放顺序、上次选的源、下载位置）留在
@@ -7,10 +7,10 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-/// config.toml 的模板，`zmusic config` 在文件不存在时写出来（带注释）
-pub const TEMPLATE: &str = r#"# zmusic 配置文件
-# 位置：~/.config/zmusic/config.toml
-# 环境变量仍可覆盖这里的值（NCM_API / NCM_DIR / NCM_QUALITY / ZMUSIC_PROXY ...）
+/// config.toml 的模板，`zmuse config` 在文件不存在时写出来（带注释）
+pub const TEMPLATE: &str = r#"# zmuse 配置文件
+# 位置：~/.config/zmuse/config.toml
+# 环境变量仍可覆盖这里的值（NCM_API / NCM_DIR / NCM_QUALITY / ZMUSE_PROXY ...）
 
 [general]
 # 音质：standard / higher / exhigh / lossless / hires
@@ -33,7 +33,7 @@ cookie = ""
 [ytdlp]
 # yt-dlp 可执行文件名或绝对路径（YouTube / SoundCloud 源用）
 binary = "yt-dlp"
-# YouTube/SoundCloud 需要代理；zmusic 与 mpv 会走同一个出口。
+# YouTube/SoundCloud 需要代理；zmuse 与 mpv 会走同一个出口。
 # 例：proxy = "socks5h://127.0.0.1:1080"
 proxy = ""
 
@@ -282,13 +282,60 @@ fn expand_tilde(s: &str, home: &Path) -> PathBuf {
     }
 }
 
+/// 老版本用过的目录名：配置 `~/.config/zmusic`、缓存 `~/.cache/zmusic`
+pub const LEGACY_DIR_NAME: &str = "zmusic";
+
+/// 新版目录不存在、旧版存在时，把旧的**复制**过来（旧目录保留，不删）。
+///
+/// 只做一次：新目录一旦存在就不再动。拷贝失败就把半成品删掉，下次再试。
+pub fn migrate_dir(new: &std::path::Path, old: &std::path::Path) {
+    if new.exists() || !old.exists() {
+        return;
+    }
+    if copy_tree(old, new).is_err() {
+        let _ = std::fs::remove_dir_all(new);
+    }
+}
+
+fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
+        let ty = e.file_type()?;
+        let to = dst.join(e.file_name());
+        if ty.is_dir() {
+            copy_tree(&e.path(), &to)?;
+        } else if ty.is_file() {
+            std::fs::copy(e.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// 改名兼容：把老脚本里的 `ZMUSIC_*` 抄到 `ZMUSE_*`（只在这个进程里，不动用户系统设置）。
+///
+/// 只覆盖直接读 `std::env` 的那几个开关；`NCM_*` / `ZMUSE_*` 走 [`Config::resolve`] 里的
+/// `env_var`，那边本来就带旧名回退，不用在这里抄。
+fn import_legacy_env() {
+    for name in ["SUPERDL_DIR", "THEME", "LANG"] {
+        let new = format!("ZMUSE_{name}");
+        if std::env::var(&new).is_err() {
+            if let Ok(v) = std::env::var(format!("ZMUSIC_{name}")) {
+                std::env::set_var(new, v);
+            }
+        }
+    }
+}
+
 impl Config {
-    /// 读取配置；`config.toml` 不存在时用内置默认值（不自动创建，创建是 `zmusic config` 的事）
+    /// 读取配置；`config.toml` 不存在时用内置默认值（不自动创建，创建是 `zmuse config` 的事）
     pub fn load() -> Self {
+        import_legacy_env();
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let config_dir = dirs::config_dir()
-            .unwrap_or_else(|| home.join(".config"))
-            .join("zmusic");
+        let base = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
+        let config_dir = base.join("zmuse");
+        // 从 zmusic 改名过来：老用户第一次跑新版自动把配置抄一份（旧目录留着）
+        migrate_dir(&config_dir, &base.join(LEGACY_DIR_NAME));
         let config_path = config_dir.join("config.toml");
         let text = std::fs::read_to_string(&config_path).ok();
         let cfg = Self::resolve(text.as_deref(), &|k| std::env::var(k).ok(), &home);
@@ -303,47 +350,54 @@ impl Config {
             .unwrap_or_default();
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| home.join(".config"))
-            .join("zmusic");
+            .join("zmuse");
 
+        // 改名兼容：先读 ZMUSE_*，没有再读旧的 ZMUSIC_*（老配置/老脚本不用改）
+        let env_var = |key: &str| -> Option<String> {
+            env(key).or_else(|| {
+                key.strip_prefix("ZMUSE_")
+                    .and_then(|rest| env(&format!("ZMUSIC_{rest}")))
+            })
+        };
         let pick = |env_key: &str, file_val: Option<String>, default: &str| -> String {
-            env(env_key)
+            env_var(env_key)
                 .and_then(non_empty)
                 .or_else(|| file_val.and_then(non_empty))
                 .unwrap_or_else(|| default.to_string())
         };
-        let pick_bool = |env: &dyn Fn(&str) -> Option<String>,
+        let pick_bool = |_env: &dyn Fn(&str) -> Option<String>,
                          env_key: &str,
                          file_val: Option<bool>,
                          default: bool|
          -> bool {
-            match env(env_key).as_deref().map(str::trim) {
+            match env_var(env_key).as_deref().map(str::trim) {
                 Some("0") | Some("false") | Some("off") | Some("no") => false,
                 Some("1") | Some("true") | Some("on") | Some("yes") => true,
                 _ => file_val.unwrap_or(default),
             }
         };
-        let pick_u8 = |env: &dyn Fn(&str) -> Option<String>,
+        let pick_u8 = |_env: &dyn Fn(&str) -> Option<String>,
                        env_key: &str,
                        file_val: Option<u8>,
                        default: u8|
          -> u8 {
-            env(env_key)
+            env_var(env_key)
                 .and_then(|v| v.trim().parse::<u8>().ok())
                 .or(file_val)
                 .unwrap_or(default)
         };
-        let pick_f32 = |env: &dyn Fn(&str) -> Option<String>,
+        let pick_f32 = |_env: &dyn Fn(&str) -> Option<String>,
                         env_key: &str,
                         file_val: Option<f32>,
                         default: f32|
          -> f32 {
-            env(env_key)
+            env_var(env_key)
                 .and_then(|v| v.trim().parse::<f32>().ok())
                 .or(file_val)
                 .unwrap_or(default)
         };
         let pick_opt = |env_key: &str, file_val: Option<String>| -> Option<String> {
-            env(env_key)
+            env_var(env_key)
                 .and_then(non_empty)
                 .or_else(|| file_val.and_then(non_empty))
         };
@@ -353,19 +407,19 @@ impl Config {
             None => home.join("Music").join("ncm"),
         };
         // [ui] theme = "mono" → 供 theme.rs 读取（真彩/256/单色三档里的单色）
-        if std::env::var("ZMUSIC_SUPERDL_DIR").is_err() {
+        if std::env::var("ZMUSE_SUPERDL_DIR").is_err() {
             if let Some(t) = parsed.superdl.as_ref().and_then(|s| s.dir.as_deref()) {
                 let t = t.trim();
                 if !t.is_empty() {
-                    std::env::set_var("ZMUSIC_SUPERDL_DIR", t);
+                    std::env::set_var("ZMUSE_SUPERDL_DIR", t);
                 }
             }
         }
-        if std::env::var("ZMUSIC_THEME").is_err() {
+        if std::env::var("ZMUSE_THEME").is_err() {
             if let Some(t) = parsed.ui.theme.as_deref() {
                 let t = t.trim();
                 if !t.is_empty() {
-                    std::env::set_var("ZMUSIC_THEME", t);
+                    std::env::set_var("ZMUSE_THEME", t);
                 }
             }
         }
@@ -375,7 +429,7 @@ impl Config {
             .language
             .clone()
             .or_else(|| parsed.language.clone())
-            .or_else(|| std::env::var("ZMUSIC_LANG").ok())
+            .or_else(|| std::env::var("ZMUSE_LANG").ok())
             .unwrap_or_else(|| "zh".to_string());
         lang.make_ascii_lowercase();
         crate::i18n::set_lang(if lang.starts_with("en") {
@@ -393,38 +447,38 @@ impl Config {
             quality: pick("NCM_QUALITY", parsed.general.quality, "exhigh"),
             api_base: pick("NCM_API", parsed.netease.api_base, "http://127.0.0.1:3000"),
             meting_url: pick(
-                "ZMUSIC_METING_URL",
+                "ZMUSE_METING_URL",
                 parsed.meting.url,
                 "http://127.0.0.1:8123",
             ),
-            meting_cookie: pick_opt("ZMUSIC_METING_COOKIE", parsed.meting.cookie),
-            proxy: pick_opt("ZMUSIC_PROXY", parsed.ytdlp.proxy),
-            ytdlp_binary: pick("ZMUSIC_YTDLP_BIN", parsed.ytdlp.binary, "yt-dlp"),
-            jamendo_client_id: pick_opt("ZMUSIC_JAMENDO_CLIENT_ID", parsed.jamendo.client_id),
+            meting_cookie: pick_opt("ZMUSE_METING_COOKIE", parsed.meting.cookie),
+            proxy: pick_opt("ZMUSE_PROXY", parsed.ytdlp.proxy),
+            ytdlp_binary: pick("ZMUSE_YTDLP_BIN", parsed.ytdlp.binary, "yt-dlp"),
+            jamendo_client_id: pick_opt("ZMUSE_JAMENDO_CLIENT_ID", parsed.jamendo.client_id),
             config_path: config_dir.join("config.toml"),
             favorites_path: config_dir.join("favorites.json"),
             settings_path: config_dir.join("settings.json"),
             animations: Animations {
-                animations: pick_bool(env, "ZMUSIC_ANIMATIONS", parsed.ui.animations, true),
+                animations: pick_bool(env, "ZMUSE_ANIMATIONS", parsed.ui.animations, true),
                 spinner: parsed.ui.spinner.unwrap_or(true),
                 equalizer: parsed.ui.equalizer.unwrap_or(true),
                 smooth_progress: parsed.ui.smooth_progress.unwrap_or(true),
                 fade: parsed.ui.fade.unwrap_or(true),
-                equalizer_fps: pick_u8(env, "ZMUSIC_EQ_FPS", parsed.ui.equalizer_fps, 30),
-                wave_spacing: pick_u8(env, "ZMUSIC_WAVE_SPACING", parsed.ui.wave_spacing, 2)
+                equalizer_fps: pick_u8(env, "ZMUSE_EQ_FPS", parsed.ui.equalizer_fps, 30),
+                wave_spacing: pick_u8(env, "ZMUSE_WAVE_SPACING", parsed.ui.wave_spacing, 2)
                     .clamp(1, 6),
                 wave_vpad: parsed.ui.wave_vpad.unwrap_or(1).min(2),
-                eq_agc: pick_bool(env, "ZMUSIC_EQ_AGC", parsed.ui.eq_agc, true),
+                eq_agc: pick_bool(env, "ZMUSE_EQ_AGC", parsed.ui.eq_agc, true),
                 eq_reference_dbfs: pick_f32(
                     env,
-                    "ZMUSIC_EQ_REF_DBFS",
+                    "ZMUSE_EQ_REF_DBFS",
                     parsed.ui.eq_reference_dbfs,
                     -6.0,
                 ),
-                eq_autogain: pick_bool(env, "ZMUSIC_EQ_AUTOGAIN", parsed.ui.eq_autogain, true),
-                eq_gain: pick_f32(env, "ZMUSIC_EQ_GAIN", parsed.ui.eq_gain, 1.6),
-                eq_soft_clip: pick_bool(env, "ZMUSIC_EQ_SOFT_CLIP", parsed.ui.eq_soft_clip, true),
-                equalizer_source: match pick("ZMUSIC_EQ_SOURCE", parsed.ui.equalizer_source, "pcm")
+                eq_autogain: pick_bool(env, "ZMUSE_EQ_AUTOGAIN", parsed.ui.eq_autogain, true),
+                eq_gain: pick_f32(env, "ZMUSE_EQ_GAIN", parsed.ui.eq_gain, 1.6),
+                eq_soft_clip: pick_bool(env, "ZMUSE_EQ_SOFT_CLIP", parsed.ui.eq_soft_clip, true),
+                equalizer_source: match pick("ZMUSE_EQ_SOURCE", parsed.ui.equalizer_source, "pcm")
                     .as_str()
                 {
                     "synth" => EqSource::Synth,
@@ -527,7 +581,7 @@ url = "http://file:8123"
         let env = |k: &str| -> Option<String> {
             match k {
                 "NCM_QUALITY" => Some("hires".to_string()),
-                "ZMUSIC_METING_URL" => Some("http://env:8123".to_string()),
+                "ZMUSE_METING_URL" => Some("http://env:8123".to_string()),
                 _ => None,
             }
         };
@@ -540,7 +594,7 @@ url = "http://file:8123"
     #[test]
     fn empty_env_var_does_not_override() {
         let env = |k: &str| -> Option<String> {
-            if k == "ZMUSIC_PROXY" {
+            if k == "ZMUSE_PROXY" {
                 Some("   ".to_string())
             } else {
                 None
@@ -548,6 +602,61 @@ url = "http://file:8123"
         };
         let c = Config::resolve(None, &env, &home());
         assert_eq!(c.proxy, None, "空字符串等于没配");
+    }
+
+    /// 改名迁移：新目录不存在就把旧的复制过来，旧目录保留不删
+    #[test]
+    fn legacy_config_dir_is_copied_once_and_kept() {
+        let root = std::env::temp_dir().join(format!("zmuse-mig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let old = root.join(LEGACY_DIR_NAME);
+        let new = root.join("zmuse");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("config.toml"), "language = \"en\"\n").unwrap();
+        std::fs::create_dir_all(old.join("nested")).unwrap();
+        std::fs::write(old.join("nested/x.txt"), "x").unwrap();
+
+        migrate_dir(&new, &old);
+        assert!(old.exists(), "旧目录必须保留");
+        assert_eq!(
+            std::fs::read_to_string(new.join("config.toml")).unwrap(),
+            "language = \"en\"\n"
+        );
+        assert!(new.join("nested/x.txt").exists(), "子目录也要复制");
+
+        // 新目录已经有内容时不再覆盖（用户改过的新配置不能被老值盖掉）
+        std::fs::write(new.join("config.toml"), "language = \"zh\"\n").unwrap();
+        migrate_dir(&new, &old);
+        assert_eq!(
+            std::fs::read_to_string(new.join("config.toml")).unwrap(),
+            "language = \"zh\"\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 改名兼容：老环境变量 ZMUSIC_PROXY 仍然生效，但 ZMUSE_PROXY 优先
+    #[test]
+    fn legacy_env_name_still_works_and_new_one_wins() {
+        let only_old = |k: &str| -> Option<String> {
+            if k == "ZMUSIC_PROXY" {
+                Some("socks5h://127.0.0.1:11080".to_string())
+            } else {
+                None
+            }
+        };
+        let c = Config::resolve(None, &only_old, &home());
+        assert_eq!(c.proxy.as_deref(), Some("socks5h://127.0.0.1:11080"));
+
+        let both = |k: &str| -> Option<String> {
+            match k {
+                "ZMUSIC_PROXY" => Some("socks5h://old:1".to_string()),
+                "ZMUSE_PROXY" => Some("socks5h://new:2".to_string()),
+                _ => None,
+            }
+        };
+        let c = Config::resolve(None, &both, &home());
+        assert_eq!(c.proxy.as_deref(), Some("socks5h://new:2"), "新名字优先");
     }
 
     #[test]

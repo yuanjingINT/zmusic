@@ -1,11 +1,11 @@
 [package]
-name = "zmusic"
+name = "zmuse"
 version = "0.1.1"
 edition = "2021"
-description = "zmusic - NetEase Cloud Music terminal player for Linux"
+description = "zmuse - NetEase Cloud Music terminal player for Linux"
 
 [[bin]]
-name = "zmusic"
+name = "zmuse"
 path = "src/main.rs"
 
 [dependencies]
