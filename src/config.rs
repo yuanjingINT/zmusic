@@ -217,6 +217,13 @@ struct Jamendo {
     client_id: Option<String>,
 }
 
+/// `[sources]`：哪些源启用。默认只有网易云，其它源用户自己加。
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SourcesSection {
+    #[serde(default)]
+    enabled: Option<Vec<String>>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     #[serde(default)]
@@ -237,6 +244,8 @@ struct FileConfig {
     ui: Ui,
     #[serde(default)]
     superdl: Option<SuperDlSection>,
+    #[serde(default)]
+    sources: Option<SourcesSection>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -261,6 +270,8 @@ pub struct Config {
     pub settings_path: PathBuf,
     /// 动效开关（`[ui]`）
     pub animations: Animations,
+    /// 启用的源 id（默认只有 `netease`）
+    pub enabled_sources: Vec<String>,
 }
 
 fn non_empty(v: String) -> Option<String> {
@@ -328,6 +339,38 @@ fn import_legacy_env() {
 }
 
 impl Config {
+    /// 把启用的源写回 `config.toml` 的 `[sources] enabled`（其它段落原样保留）。
+    pub fn save_enabled_sources(&self, ids: &[String]) -> anyhow::Result<PathBuf> {
+        let path = &self.config_path;
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let mut doc: toml::Value = match std::fs::read_to_string(path) {
+            Ok(t) => toml::from_str(&t).unwrap_or_else(|_| toml::Value::Table(Default::default())),
+            Err(_) => toml::from_str(TEMPLATE)
+                .unwrap_or_else(|_| toml::Value::Table(Default::default())),
+        };
+        let table = doc
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("config.toml is not a table"))?;
+        let sources = table
+            .entry("sources".to_string())
+            .or_insert_with(|| toml::Value::Table(Default::default()));
+        let sources = sources
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("[sources] is not a table"))?;
+        sources.insert(
+            "enabled".to_string(),
+            toml::Value::Array(
+                ids.iter()
+                    .map(|s| toml::Value::String(s.clone()))
+                    .collect(),
+            ),
+        );
+        std::fs::write(path, toml::to_string_pretty(&doc)?)?;
+        Ok(path.clone())
+    }
+
     /// 读取配置；`config.toml` 不存在时用内置默认值（不自动创建，创建是 `zmuse config` 的事）
     pub fn load() -> Self {
         import_legacy_env();
@@ -455,6 +498,21 @@ impl Config {
             proxy: pick_opt("ZMUSE_PROXY", parsed.ytdlp.proxy),
             ytdlp_binary: pick("ZMUSE_YTDLP_BIN", parsed.ytdlp.binary, "yt-dlp"),
             jamendo_client_id: pick_opt("ZMUSE_JAMENDO_CLIENT_ID", parsed.jamendo.client_id),
+            enabled_sources: parsed
+                .sources
+                .and_then(|s| s.enabled)
+                .map(|v| {
+                    let mut out: Vec<String> = Vec::new();
+                    for id in v {
+                        let id = id.trim().to_string();
+                        if !id.is_empty() && !out.contains(&id) {
+                            out.push(id);
+                        }
+                    }
+                    out
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| vec!["netease".to_string()]),
             config_path: config_dir.join("config.toml"),
             favorites_path: config_dir.join("favorites.json"),
             settings_path: config_dir.join("settings.json"),

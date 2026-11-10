@@ -210,8 +210,27 @@ At runtime it writes:
 
 ### Sources at a glance
 
-In the search screen, `S` cycles through the groups "domestic → international →
-public/free"; the choice is stored in `settings.json` and defaults to NetEase.
+**Only NetEase is enabled out of the box.** Everything else ships in the binary
+but stays switched off: it is not registered, not probed and never shows up in
+the source list until you turn it on:
+
+```bash
+zmuse source list            # what is enabled now
+zmuse source list --all      # every built-in source with its enabled flag
+zmuse source add meting      # enable a group (meting = QQ/Kugou/Baidu/Kuwo)
+zmuse source add youtube soundcloud audius
+zmuse source remove migu     # switch one off again
+```
+
+`add`/`remove` write `[sources] enabled` in `~/.config/zmuse/config.toml`,
+rebuild the registry on the spot, and a running player picks it up on the next
+`R` (re-probe) — no restart. `meting` expands to the four Meting sources and
+`all` enables everything. Unknown ids fail with the list of valid ones.
+
+All enabled sources behave as before: in the search screen, `S` cycles through
+them by group (domestic → international → public/free); the choice is stored in
+`settings.json`; only enabled sources take part in probing, the `源 x/y` counter,
+the source status panel and the aggregate search.
 What each source can do (which search kinds, lyrics, playable or not) comes from
 `Source::capabilities()`, and the UI disables what is unsupported instead of
 guessing.

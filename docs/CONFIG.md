@@ -26,6 +26,41 @@ UI 偏好（播放顺序、上次选的源、下载位置）存在 `~/.config/zm
 `ZMUSIC_*`（`NCM_*` 那几个没改名）。Arch 包里带 `replaces=(zmusic)`/`conflicts=(zmusic)`，
 `pacman -Syu` 会自动换掉旧包。
 
+## 启用了哪些源（`[sources] enabled`）
+
+**默认只有网易云。** 其它源都编译在二进制里，但默认不注册、不探测、不出现在源列表里，
+也不弹「侧车未启动」这类提示——想要哪个自己打开：
+
+```bash
+zmuse source list          # 当前启用的
+zmuse source list --all    # 全部内置源 + 是否启用
+zmuse source add meting    # 一次开一组（meting = QQ/酷狗/百度/酷我）
+zmuse source add youtube soundcloud
+zmuse source remove migu
+```
+
+`add`/`remove` 直接写回 `config.toml`：
+
+```toml
+[sources]
+enabled = ["netease", "youtube"]
+```
+
+写回后立即生效；已经在跑的播放器按一下 `R`（重新探测）就会按新列表重建，不用重启。
+`meting` 是分组别名（展开成四个 meting 源），`all` 是全部；id 写错会报错并列出可用的 id。
+停用网易云是允许的，但会提示「你没有默认源了」。
+
+可用的 id：
+
+| id | 源 | 说明 |
+|----|----|------|
+| `netease` | 网易云 | 默认启用，需要本地 ncm-api |
+| `qq` | QQ 音乐（直连） | 免费曲目可播 |
+| `meting:tencent` / `meting:kugou` / `meting:baidu` / `meting:kuwo` | Meting 四家 | 需要 Meting 侧车 |
+| `migu` | 咪咕 | 搜索不带时长 |
+| `youtube` / `soundcloud` | yt-dlp 系 | 需要 `yt-dlp` 和代理 |
+| `audius` / `ccmixter` / `jamendo` / `wikimedia` / `opengameart` | 公开免费源 | Jamendo 需要 client_id |
+
 ## 源 → 需要什么
 
 | 源 | 默认可用 | 需要什么 |

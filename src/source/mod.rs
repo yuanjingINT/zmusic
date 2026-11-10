@@ -153,6 +153,57 @@ pub fn by_source_priority(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// 内部源 id → 给人看的名字。列表/正在播放/i 弹窗都走它，未知 id 原样返回。
+/// 全部内置源 id，顺序 = 注册顺序 = `S` 循环顺序 = 去重代表源优先级。
+pub const ALL_SOURCE_IDS: &[&str] = &[
+    "netease",
+    "qq",
+    "meting:tencent",
+    "meting:kugou",
+    "meting:baidu",
+    "meting:kuwo",
+    "migu",
+    "youtube",
+    "soundcloud",
+    "audius",
+    "ccmixter",
+    "jamendo",
+    "wikimedia",
+    "opengameart",
+];
+
+/// 把用户输入展开成具体 id：支持 `meting`（四个 meting 源）和 `all`。
+/// 返回空 Vec 表示有无法识别的 id（调用方负责报错）。
+pub fn expand_source_ids(args: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut ok: Vec<String> = Vec::new();
+    let mut bad: Vec<String> = Vec::new();
+    for a in args {
+        let a = a.trim();
+        match a {
+            "meting" => {
+                for id in ALL_SOURCE_IDS.iter().filter(|i| i.starts_with("meting:")) {
+                    if !ok.contains(&id.to_string()) {
+                        ok.push(id.to_string());
+                    }
+                }
+            }
+            "all" => {
+                for id in ALL_SOURCE_IDS {
+                    if !ok.contains(&id.to_string()) {
+                        ok.push(id.to_string());
+                    }
+                }
+            }
+            other if ALL_SOURCE_IDS.contains(&other) => {
+                if !ok.contains(&other.to_string()) {
+                    ok.push(other.to_string());
+                }
+            }
+            other => bad.push(other.to_string()),
+        }
+    }
+    (ok, bad)
+}
+
 pub fn source_display(id: &str) -> String {
     source_display_lang(id, !crate::i18n::en())
 }
@@ -222,6 +273,7 @@ impl SourceRegistry {
 
     /// 默认注册全部源；配置（config.toml / 环境变量）由调用方传进来
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn with_defaults(
         netease_base: String,
         proxy: Option<String>,
@@ -229,37 +281,71 @@ impl SourceRegistry {
         ytdlp_bin: String,
         meting_cookie: Option<String>,
         jamendo_client_id: Option<String>,
+        enabled: &[String],
     ) -> Self {
         let mut reg = SourceRegistry::new();
+        // 只注册启用的源：默认配置下只有网易云，其余由 `zmuse source add` 打开。
+        let on = |id: &str| enabled.iter().any(|e| e == id);
+        let want = |id: &str| {
+            if on(id) {
+                Some(())
+            } else {
+                None
+            }
+        };
+        let _ = &want;
         // 注册顺序 = `S` 循环顺序 = 去重代表源的优先级：网易云钉死第一，
         // 然后国内（QQ 直连 → Meting 系 → 咪咕）→ 国际 → 公开免费
-        reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
-        reg.register(Arc::new(qq::QqSource::new()));
-        for server in ["tencent", "kugou", "baidu", "kuwo"] {
-            reg.register(Arc::new(meting::MetingSource::with_cookie(
-                meting_base.clone(),
-                server,
-                meting_cookie.clone(),
-            )));
+        if on("netease") {
+            reg.register(Arc::new(netease::NetEaseSource::new(netease_base)));
         }
-        reg.register(Arc::new(migu::MiguSource::new()));
+        if on("qq") {
+            reg.register(Arc::new(qq::QqSource::new()));
+        }
+        for server in ["tencent", "kugou", "baidu", "kuwo"] {
+            if on(&format!("meting:{server}")) {
+                reg.register(Arc::new(meting::MetingSource::with_cookie(
+                    meting_base.clone(),
+                    server,
+                    meting_cookie.clone(),
+                )));
+            }
+        }
+        if on("migu") {
+            reg.register(Arc::new(migu::MiguSource::new()));
+        }
         // 国际
         // 走 yt-dlp 的一组站点（同一套逻辑按 Site 参数化）
-        for site in [ytdlp::Site::YouTube, ytdlp::Site::SoundCloud] {
-            let src = match &proxy {
-                Some(p) => ytdlp::YtDlpSource::with_proxy(site, &ytdlp_bin, Some(p.clone())),
-                None => ytdlp::YtDlpSource::with_proxy(site, &ytdlp_bin, None),
-            };
-            reg.register(Arc::new(src));
+        for (site, id) in [
+            (ytdlp::Site::YouTube, "youtube"),
+            (ytdlp::Site::SoundCloud, "soundcloud"),
+        ] {
+            if on(id) {
+                let src = match &proxy {
+                    Some(p) => ytdlp::YtDlpSource::with_proxy(site, &ytdlp_bin, Some(p.clone())),
+                    None => ytdlp::YtDlpSource::with_proxy(site, &ytdlp_bin, None),
+                };
+                reg.register(Arc::new(src));
+            }
         }
         // 公开免费
-        reg.register(Arc::new(audius::AudiusSource::new()));
-        reg.register(Arc::new(ccmixter::CcMixterSource::new()));
-        reg.register(Arc::new(jamendo::JamendoSource::with_client_id(
-            jamendo_client_id,
-        )));
-        reg.register(Arc::new(wikimedia::WikimediaSource::new()));
-        reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
+        if on("audius") {
+            reg.register(Arc::new(audius::AudiusSource::new()));
+        }
+        if on("ccmixter") {
+            reg.register(Arc::new(ccmixter::CcMixterSource::new()));
+        }
+        if on("jamendo") {
+            reg.register(Arc::new(jamendo::JamendoSource::with_client_id(
+                jamendo_client_id,
+            )));
+        }
+        if on("wikimedia") {
+            reg.register(Arc::new(wikimedia::WikimediaSource::new()));
+        }
+        if on("opengameart") {
+            reg.register(Arc::new(opengameart::OpenGameArtSource::new()));
+        }
         reg
     }
 
@@ -326,6 +412,7 @@ mod tests {
             "yt-dlp".to_string(),
             None,
             None,
+            &all_ids(),
         );
         assert!(reg.len() >= 2);
         let s = reg.get("netease").expect("默认应注册网易云");
@@ -347,6 +434,7 @@ mod tests {
             "yt-dlp".to_string(),
             None,
             None,
+            &all_ids(),
         );
         reg.register(Arc::new(netease::NetEaseSource::new(
             "http://127.0.0.1:3000".to_string(),
@@ -363,6 +451,7 @@ mod tests {
             "yt-dlp".to_string(),
             None,
             None,
+            &all_ids(),
         );
         let err = reg
             .stream_url("spotify", &TrackId::from("dQw4w9WgXcQ"), "exhigh")
@@ -411,6 +500,7 @@ mod tests {
             "yt-dlp".to_string(),
             None,
             None,
+            &all_ids(),
         );
         let ids: Vec<&str> = reg.all().iter().map(|s| s.id()).collect();
         assert_eq!(ids[0], "netease", "S 循环第一个必须是网易云");
@@ -447,6 +537,47 @@ mod tests {
         }
         assert_eq!(source_priority("netease"), 0);
         assert_eq!(source_priority("whatever-new"), 99);
+    }
+
+    /// 默认配置只启用网易云：其它源不注册（探测/列表/计数都跟着它走）
+    #[test]
+    fn default_config_registers_netease_only() {
+        let reg = SourceRegistry::with_defaults(
+            "http://127.0.0.1:3000".to_string(),
+            None,
+            "http://127.0.0.1:8123".to_string(),
+            "yt-dlp".to_string(),
+            None,
+            None,
+            &["netease".to_string()],
+        );
+        assert_eq!(reg.len(), 1, "默认只该有网易云");
+        assert!(reg.get("netease").is_some());
+        assert!(reg.get("youtube").is_none());
+        assert!(reg.get("meting:tencent").is_none());
+    }
+
+    /// `meting` 分组能一次展开成四个源；`all` 是全部；未知 id 报回来
+    #[test]
+    fn source_id_aliases_expand() {
+        let (ok, bad) = expand_source_ids(&["meting".to_string()]);
+        assert_eq!(ok.len(), 4, "{ok:?}");
+        assert!(bad.is_empty());
+
+        let (ok, _) = expand_source_ids(&["all".to_string()]);
+        assert_eq!(ok.len(), ALL_SOURCE_IDS.len());
+
+        let (ok, bad) = expand_source_ids(&["netease".to_string(), "nope".to_string()]);
+        assert_eq!(ok, vec!["netease".to_string()]);
+        assert_eq!(bad, vec!["nope".to_string()]);
+    }
+
+    /// 测试用：全部源都启用（改名后默认只开网易云，行为测试要按全量跑）
+    fn all_ids() -> Vec<String> {
+        crate::source::ALL_SOURCE_IDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     #[test]

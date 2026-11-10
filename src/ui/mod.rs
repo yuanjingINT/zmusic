@@ -2183,6 +2183,34 @@ impl App {
     }
 
     /// 启动/`R` 重探：所有源并发探活，结果通过 `AppMsg::Probe` 回到主线程
+    /// 重新读 config.toml 的 `[sources] enabled` 并重建 registry。
+    /// 运行中执行过 `zmuse source add/remove` 之后，按 R 就能生效，不用重启。
+    fn reload_registry(&mut self) {
+        let cfg = crate::config::Config::load();
+        let ok = |id: &str| cfg.enabled_sources.iter().any(|e| e == id);
+        if ok("netease") == self.registry.get("netease").is_some()
+            && cfg.enabled_sources.len() == self.registry.len()
+        {
+            return; // 没变化就别白重建
+        }
+        let registry = crate::source::SourceRegistry::with_defaults(
+            cfg.api_base.clone(),
+            cfg.proxy.clone(),
+            cfg.meting_url.clone(),
+            cfg.ytdlp_binary.clone(),
+            cfg.meting_cookie.clone(),
+            cfg.jamendo_client_id.clone(),
+            &cfg.enabled_sources,
+        );
+        self.registry = Arc::new(registry);
+        // 当前源的 id 可能被停用了，退回聚合
+        if self.source_id != AGGREGATE_ID && self.registry.get(&self.source_id).is_none() {
+            self.source_id = AGGREGATE_ID.to_string();
+        }
+        self.health = health::HealthTable::new(health::DEFAULT_TTL);
+        self.eq_last_pos = None;
+    }
+
     fn start_probe(&mut self) {
         if self.health.probing_count() > 0 {
             return;
@@ -2247,6 +2275,8 @@ impl App {
     }
 
     fn reprobe_with_toast(&mut self) {
+        // 先按磁盘上的配置重建（用户可能刚在外面 `zmuse source add` 过）
+        self.reload_registry();
         let before = self.probe_gen;
         self.start_probe();
         self.toast = Some((

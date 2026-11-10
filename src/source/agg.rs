@@ -329,6 +329,7 @@ mod bench {
             "yt-dlp".to_string(),
             None,
             None,
+            &all_ids(),
         );
         reg.all()
             .iter()
@@ -349,6 +350,7 @@ mod bench {
             "yt-dlp".to_string(),
             None,
             None,
+            &all_ids(),
         );
         let src = reg.get("netease").unwrap();
         for round in 1..=3 {
@@ -790,4 +792,12 @@ mod tests {
             stats.finished
         );
     }
-}
+}    /// 测试用：全部源都启用（改名后默认只开网易云，行为测试要按全量跑）
+    fn all_ids() -> Vec<String> {
+        crate::source::ALL_SOURCE_IDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+
