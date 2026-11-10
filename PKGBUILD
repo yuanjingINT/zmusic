@@ -8,7 +8,9 @@ conflicts=('zmusic')
 pkgdesc="Terminal NetEase Cloud Music player (Rust / ratatui TUI)"
 arch=('x86_64' 'aarch64')
 install=zmuse.install
-url="https://git.tuxai.org/personal/zmuse"
+# 仓库路径暂时仍是 personal/zmusic：改项目路径是服务端操作，等和 GitHub 改名一起做；
+# 改完这里同步换成 personal/zmuse，并按新路径重钉 _commit 与 sha256sums。
+url="https://git.tuxai.org/personal/zmusic"
 license=('GPL-3.0-only')
 depends=('gcc-libs' 'openssl')
 makedepends=('cargo' 'rust')
@@ -17,15 +19,18 @@ optdepends=('mpv: audio playback'
             'yt-dlp: YouTube source search and playback (needs a proxy)')
 
 # 源码固定到 GitLab 上**已推送**的 commit 归档（本地未推的 commit 会 404）。
+# 归档顶层目录名是 <项目路径>-<commit>，而项目路径还是 zmusic，所以这里单独用
+# _srcdir；不能用 $pkgname（包名已经是 zmuse），否则 build() 会 cd 到不存在的目录。
 # 发版时把 _commit 换成要发的那一版，并重算 sha256sums：
-#   curl -sSfL "$url/-/archive/$_commit/$pkgname-$_commit.tar.gz" | sha256sum
+#   curl -sSfL "$url/-/archive/$_commit/$_srcdir.tar.gz" | sha256sum
 # 之后公开了 tag，也可以换成 tag 归档：$_commit 的位置写 v$pkgver。
-_commit=94c872f1dde4c2cdd4144c3ffedcac0d666622d5
-source=("$pkgname-$_commit.tar.gz::$url/-/archive/$_commit/$pkgname-$_commit.tar.gz")
-sha256sums=('538ca91e5e17793ec5ed048a53b93b9d6bf8d521abc9a826f0f4ae3c72e98958')
+_commit=56a7c0f8c21cb4a726ce5c0937a549ef3bab41fb
+_srcdir="zmusic-$_commit"
+source=("$_srcdir.tar.gz::$url/-/archive/$_commit/$_srcdir.tar.gz")
+sha256sums=('ce00ba37fe6a1795993212946e92f5456058387114a29b1ffe5ec76e456c48b0')
 
 build() {
-  cd "$srcdir/$pkgname-$_commit"
+  cd "$srcdir/$_srcdir"
   export CARGO_HOME="$srcdir/cargo-home"
   # 构建可复现：别把家目录/构建目录的绝对路径嵌进二进制（panic 的 Location::file 会带）
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build/zmuse --remap-path-prefix=$HOME=/build/home"
@@ -33,7 +38,7 @@ build() {
 }
 
 package() {
-  cd "$srcdir/$pkgname-$_commit"
+  cd "$srcdir/$_srcdir"
   install -Dm755 target/release/zmuse "$pkgdir/usr/bin/zmuse"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
