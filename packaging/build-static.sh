@@ -121,7 +121,13 @@ RestartSec=3
 WantedBy=default.target
 UNIT
 
-( cd "$STAGE" && tar --owner=0 --group=0 --numeric-owner -czf "$OUT/$NAME.tar.gz" "$NAME" )
+# 可复现：同样的 commit 两次构建应当逐字节一致。
+#   --sort=name        文件顺序固定
+#   --mtime            tar 里记录的时间取 commit 时间，而不是本机打包时刻
+#   gzip -n            不把 gzip 头里的时间和文件名写进去
+MTIME="$(git -C "$ROOT" log -1 --format=%cI 2>/dev/null || echo 2026-01-01T00:00:00Z)"
+( cd "$STAGE" && tar --sort=name --mtime="$MTIME" --owner=0 --group=0 --numeric-owner \
+      --use-compress-program='gzip -n' -cf "$OUT/$NAME.tar.gz" "$NAME" )
 
 echo "==> $OUT/$NAME.tar.gz"
 ls -l "$OUT/$NAME.tar.gz" | awk '{print "    size:", $5, "bytes"}'

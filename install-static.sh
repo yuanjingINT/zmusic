@@ -13,7 +13,14 @@
 #   --uninstall    remove the installed binary
 #   --insecure-sha-only  install without gpg (sha256 from SHA256SUMS still checked)
 #   --no-sidecar   do not install the Meting sidecar / systemd user unit
+#   --no-ncm       do not install the local NetEase API service
+#   --ncm-port N   port for the NetEase API (default 3000)
 #   --help
+#
+# The NetEase source needs a local API service (the npm package
+# @neteasecloudmusicapienhanced/api, Node >= 22, listening on 127.0.0.1:3000).
+# It is installed into ~/.local/share/ncm-api and run as a systemd --user unit;
+# nothing global is touched and the user's npm config is not modified.
 #
 # Download layout (published by the release job):
 #   <base>/latest                      plain-text version, atomically replaced
@@ -38,6 +45,8 @@ VERSION=""
 DO_UNINSTALL=0
 DO_GPG=1
 DO_SIDECAR=1
+DO_NCM=1
+NCM_PORT="${ZMUSE_NCM_PORT:-3000}"
 
 die() { printf 'zmuse: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
@@ -54,6 +63,8 @@ while [ $# -gt 0 ]; do
         --uninstall) DO_UNINSTALL=1; shift ;;
         --no-gpg|--insecure-sha-only) DO_GPG=0; shift ;;
         --no-sidecar) DO_SIDECAR=0; shift ;;
+        --no-ncm)     DO_NCM=0; shift ;;
+        --ncm-port)   [ $# -ge 2 ] || die "--ncm-port needs a value"; NCM_PORT="$2"; shift 2 ;;
         --help|-h)   usage ;;
         *)           die "unknown option: $1 (try --help)" ;;
     esac
@@ -61,6 +72,208 @@ done
 
 PREFIX="${PREFIX/#\~/$HOME}"
 BIN="$PREFIX/zmuse"
+
+# ---------------------------------------------------------------- NetEase API
+ncm_deps_hint() {
+    say ""
+    say "The NetEase source needs a local API service, which needs Node.js >= 22."
+    if [ -r /etc/os-release ]; then
+        . /etc/os-release
+        case "${ID:-}${ID_LIKE:-}" in
+            *arch*)    say "  sudo pacman -S nodejs npm" ;;
+            *debian*|*ubuntu*|*linuxmint*) say "  sudo apt install nodejs npm   # 22+ may need nodesource" ;;
+            *fedora*)  say "  sudo dnf install nodejs npm" ;;
+            *opensuse*|*suse*) say "  sudo zypper install nodejs22 npm" ;;
+            *alpine*)  say "  sudo apk add nodejs npm" ;;
+            *)         say "  install Node.js >= 22 and npm with your package manager" ;;
+        esac
+    else
+        say "  install Node.js >= 22 and npm with your package manager"
+    fi
+    say ""
+    say "Until then zmuse runs with the sources that need no sidecar (YouTube,"
+    say "Audius, ccMixter, ...). Re-run this installer later to add the API."
+}
+
+ncm_ready() {
+    command -v curl >/dev/null 2>&1 || return 1
+    curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$NCM_PORT/personalized?limit=1" 2>/dev/null
+}
+
+install_ncm() {
+    local dir="$HOME/.local/share/ncm-api"
+    local api="$dir/node_modules/@neteasecloudmusicapienhanced/api"
+    local unit="$HOME/.config/systemd/user/ncm-api.service"
+
+    if ncm_ready; then
+        say "  NetEase API already answers on 127.0.0.1:$NCM_PORT, leaving it alone"
+        return 0
+    fi
+
+    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+        say "  node/npm missing: skipping the local NetEase API"
+        ncm_deps_hint
+        return 0
+    fi
+    local ver
+    ver="$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+    case "$ver" in
+        ''|*[!0-9]*) ver=0 ;;
+    esac
+    if [ "$ver" -lt 22 ]; then
+        say "  node $(node -v) is too old (need >= 22): skipping the local NetEase API"
+        ncm_deps_hint
+        return 0
+    fi
+
+    say "  installing the local NetEase API (npm, into ~/.local/share/ncm-api)"
+    mkdir -p "$dir"
+    ( cd "$dir" &&
+      [ -f package.json ] || npm init -y >/dev/null 2>&1
+      npm i @neteasecloudmusicapienhanced/api --no-audit --no-fund >/dev/null 2>&1 ) || {
+        say "  npm install failed: skipping the local NetEase API (re-run later to retry)"
+        return 0
+    }
+    [ -f "$api/app.js" ] || { say "  the API package did not land where expected, skipping"; return 0; }
+    : > "$dir/.zmuse-installed"
+
+    # 解灰补丁：上游用 req.baseUrl 判断路由，app.all() 注册的路由 baseUrl 为空，
+    # 通用解锁永不触发；这里换成匹配 req.path 并支持批量。补丁失败不中断安装。
+    if command -v python3 >/dev/null 2>&1 && ! grep -q "batch_unblock_patched" "$api/server.js"; then
+        if python3 - "$api/server.js" >/dev/null 2>&1 <<'PYEOF'
+import sys
+p = sys.argv[1]
+src = open(p, encoding='utf-8').read()
+marker = "req.baseUrl === '/song/url/v1'"
+if marker not in src:
+    sys.exit(0)  # 已修补或版本不同
+start = src.find("        // 夹带私货部分")
+assert start != -1, 'unblock comment not found'
+# 平衡括号扫描, 找到整个 if 块的结束
+i = src.find("if (", start)
+depth = 0
+end = None
+in_str = False
+while i < len(src):
+    c = src[i]
+    if in_str:
+        if c == '\\':
+            i += 2
+            continue
+        if c in "'\"`":
+            in_str = False
+    else:
+        if c in "'\"`":
+            in_str = True
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                # 到达 if (...) 的结尾
+                j = src.find('\n', i)
+                end = src.find('\n        }', j)
+                end = src.find('\n        }', end + 9) if end != -1 else -1
+                if end != -1:
+                    end += len('\n        }')
+                break
+    i += 1
+assert end is not None, 'could not find block end'
+
+new_block = '''        // 夹带私货部分：如果开启了通用解锁，并且是获取歌曲URL的接口，则尝试解锁（如果需要的话）ヾ(≧▽≦*)o // batch_unblock_patched
+        if (
+          (req.path === '/song/url/v1' || req.baseUrl === '/song/url/v1') &&
+          process.env.ENABLE_GENERAL_UNBLOCK === 'true'
+        ) {
+          const {
+            matchID,
+          } = require('@neteasecloudmusicapienhanced/unblockmusic-utils')
+          const data = moduleResponse.body.data
+          if (Array.isArray(data)) {
+            for (const song of data) {
+              if (
+                song &&
+                (song.freeTrialInfo !== null ||
+                  !song.url ||
+                  [1, 4].includes(song.fee))
+              ) {
+                logger.info('Starting unblock(uses general unblock):', song.id)
+                try {
+                  const result = await matchID(song.id)
+                  if (result && result.data && result.data.url) {
+                    song.url = result.data.url
+                    song.freeTrialInfo = null
+                    logger.info('Unblock success! url:', song.url)
+                  } else {
+                    logger.warn('Unblock failed for song:', song.id)
+                  }
+                } catch (e) {
+                  logger.error('Unblock error for song:', song.id, e.message)
+                }
+              }
+              if (song && song.url && song.url.includes('kuwo')) {
+                const proxy = process.env.PROXY_URL
+                const useProxy = process.env.ENABLE_PROXY || 'false'
+                if (useProxy === 'true' && proxy) {
+                  song.proxyUrl = proxy + song.url
+                }
+              }
+            }
+          }
+        }'''
+
+src = src[:start] + new_block + src[end:]
+open(p, 'w', encoding='utf-8').write(src)
+print('patched:', p)
+PYEOF
+        then
+            say "  unblock patch applied"
+        else
+            say "  unblock patch failed (upstream changed?); the API still runs, VIP unblocking may not"
+        fi
+    fi
+
+    mkdir -p "$HOME/.config/systemd/user"
+    cat > "$unit" <<UNIT
+[Unit]
+Description=NetEase Cloud Music API (NeteaseCloudMusicApiEnhanced)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PORT=$NCM_PORT
+Environment=ENABLE_GENERAL_UNBLOCK=true
+WorkingDirectory=$api
+ExecStart=$(command -v node) app.js
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+UNIT
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        systemctl --user enable --now ncm-api.service >/dev/null 2>&1 || true
+        printf '  waiting for the API'
+        local i=0
+        while [ $i -lt 25 ]; do
+            if ncm_ready; then
+                printf ' ok (127.0.0.1:%s)\n' "$NCM_PORT"
+                return 0
+            fi
+            printf '.'
+            i=$((i + 1))
+            sleep 1
+        done
+        printf '\n'
+        say "  the API did not answer within 25s; check: journalctl --user -u ncm-api -n 50"
+    else
+        say "  systemd is not available, so the API was installed but not started"
+    fi
+}
 
 # ---------------------------------------------------------------- uninstall
 if [ "$DO_UNINSTALL" -eq 1 ]; then
@@ -79,6 +292,19 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
         say "removed the Meting sidecar unit"
     fi
     rm -rf "$HOME/.local/share/zmuse"
+    NCM_UNIT_U="$HOME/.config/systemd/user/ncm-api.service"
+    NCM_DIR_U="$HOME/.local/share/ncm-api"
+    if [ -f "$NCM_DIR_U/.zmuse-installed" ]; then
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --user disable --now ncm-api.service >/dev/null 2>&1 || true
+        fi
+        rm -f "$NCM_UNIT_U"
+        rm -rf "$NCM_DIR_U"
+        command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/null 2>&1 || true
+        say "removed the local NetEase API service"
+    elif [ -d "$NCM_DIR_U" ]; then
+        say "left $NCM_DIR_U alone (it was not installed by this script)"
+    fi
     say "your settings were left alone: ~/.config/zmuse and ~/.cache/zmuse"
     exit 0
 fi
@@ -201,6 +427,11 @@ elif [ "$DO_SIDECAR" -eq 1 ]; then
     say ""
     say "note: this tarball has no Meting sidecar, so QQ / Kugou / Baidu / Kuwo will"
     say "      report \"sidecar not running\". Everything else works."
+fi
+
+# ---------------------------------------------------------------- NetEase API
+if [ "$DO_NCM" -eq 1 ]; then
+    install_ncm
 fi
 
 # 文档和许可证
