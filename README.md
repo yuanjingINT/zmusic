@@ -101,7 +101,8 @@ should prefer `dito-repo` above.
 
 Needs a Rust toolchain (`rustc` >= the `rust-version` in `Cargo.toml`, 1.88
 right now), a C compiler, `pkg-config`, OpenSSL headers and `make`. Compiling
-takes 1–3 minutes; the static tarball stays the preferred route.
+takes 1–3 minutes with a warm cargo cache (4–5 minutes on a cold one); the static
+tarball stays the preferred route.
 
 The install script can build it for you — same target layout, same sidecar, same
 user unit, same `--uninstall` as the prebuilt route:
@@ -113,7 +114,18 @@ curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh -s -- --from-source
 It fetches the latest release tag (`--version 0.1.1` pins one; `master` is never
 built implicitly), runs `cargo build --release --locked` in a temporary
 directory, installs the binary, the Meting sidecar, the unit and the docs, then
-deletes the source tree. If the build fails, the log stays at
+deletes the source tree. `--source github` takes the tag archive from
+`codeload.github.com` and never runs `git` — useful where GitHub's git over
+HTTPS stalls — and the script can be fetched from raw.githubusercontent.com, so
+the install does not depend on this repo's mirror at all:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yuanjingINT/zmusic/master/install-static.sh \
+     | sh -s -- --from-source --source github
+```
+
+`--source gitlab` (the default) shallow-clones the tag; if that fails it tries
+the GitLab archive and then GitHub. If the build fails, the log stays at
 `/tmp/zmuse-build.log` (override with `ZMUSE_BUILD_LOG`). Missing build tools are
 reported with a per-distribution install command — the script installs nothing
 itself and never runs `sudo`.

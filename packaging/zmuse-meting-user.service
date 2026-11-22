@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/.local/share/zmuse/sidecar
 Environment=METING_PORT=8123
-# 可选：把 cookie 放在这个文件里（600），别写进 unit 正文或仓库
+# Optional: put the cookie in this file (mode 600), not in the unit or the repo
 EnvironmentFile=-%h/.config/zmuse/meting.env
 ExecStart=/usr/bin/env node meting.js
 Restart=on-failure

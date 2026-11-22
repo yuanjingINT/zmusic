@@ -39,9 +39,18 @@ curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh -s -- --from-source
   不自己装、不 sudo。
 - 默认取最新 release tag（`--version 0.1.1` 可指定，不跟 master），在临时目录
   `cargo build --release --locked`，装完只留产物，源码目录会删掉。
+- 源码从哪来由 `--source` 决定：`gitlab`（默认，浅克隆 tag；克隆失败自动退到 GitLab
+  归档、再退到 GitHub）或 `github`（直接用 codeload 的 tag 归档，完全不跑 git，适合
+  GitHub 的 git over HTTPS 被限速的网络）。走 GitHub 时脚本本身也能从 raw 取，不依赖
+  镜像站：
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/yuanjingINT/zmusic/master/install-static.sh \
+       | sh -s -- --from-source --source github
+  ```
 - 装的位置和静态包一样：`~/.local/bin/zmuse`、`~/.local/share/zmuse/sidecar`、
   `~/.config/systemd/user/zmuse-meting.service`、文档；`--uninstall`、`--no-ncm` 行为一致。
-- 编译 1–3 分钟；失败时日志留在 `/tmp/zmuse-build.log`（`ZMUSE_BUILD_LOG` 可改）。
+- 编译 1–3 分钟（cargo 缓存空时 4–5 分钟）；失败时日志留在 `/tmp/zmuse-build.log`（`ZMUSE_BUILD_LOG` 可改）。
 - **静态包仍是首选**：不用工具链、一条命令下完，也带签名校验。
 
 ## 启用了哪些源（`[sources] enabled`）

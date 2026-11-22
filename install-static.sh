@@ -1,5 +1,5 @@
 #!/bin/sh
-# zmuse installer — one line, no root:
+# zmuse installer - one line, no root:
 #
 #   curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh
 #
@@ -7,27 +7,7 @@
 # or ZMUSE_PREFIX). Nothing outside your home directory is touched, and the
 # script never runs sudo. Re-run it to upgrade; --uninstall removes the binary.
 #
-# Options:
-#   --prefix DIR   install into DIR (default ~/.local/bin or $ZMUSE_PREFIX)
-#   --version X    install a specific version instead of "latest"
-#   --uninstall    remove the installed binary
-#   --insecure-sha-only  install without gpg (sha256 from SHA256SUMS still checked)
-#   --no-sidecar   do not install the Meting sidecar / systemd user unit
-#   --no-ncm       do not install the local NetEase API service
-#   --ncm-port N   port for the NetEase API (default 3000)
-#   --from-source  build from a release tag locally instead of downloading a tarball
-#   --help
-#
-# --from-source (every distribution, needs a Rust toolchain):
-#   curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh -s -- --from-source
-#
-#   Fetch tag v<version> (latest release unless --version is given), run
-#   `cargo build --release --locked` in a temporary directory, then install the
-#   binary, sidecar, unit and docs exactly like the static route. The source tree
-#   is deleted afterwards; only the build log is kept (/tmp/zmuse-build.log).
-#   Missing build tools are reported with a per-distribution install command; this
-#   script never installs them and never runs sudo. Compilation takes 1-3 minutes;
-#   the static tarball stays the preferred route.
+# Run with --help for the option list and the download layout.
 #
 # The NetEase source needs a local API service (the npm package
 # @neteasecloudmusicapienhanced/api, Node >= 22, listening on 127.0.0.1:3000).
@@ -46,7 +26,9 @@
 #   ZMUSE_KEY_URL       the repository public key
 #   ZMUSE_PREFIX        same as --prefix
 #   ZMUSE_SOURCE_REPO   git URL to clone for --from-source
-#   ZMUSE_SOURCE_ARCHIVE  fallback tarball URL used when the clone fails
+#   ZMUSE_SOURCE_ARCHIVE  GitLab tag archive URL (used when the clone fails)
+#   ZMUSE_GITHUB_REPO   owner/repo for --source github (default yuanjingINT/zmusic)
+#   ZMUSE_GITHUB_ARCHIVE  full codeload URL for --source github
 #   ZMUSE_BUILD_LOG     build log path (default /tmp/zmuse-build.log)
 set -eu
 
@@ -61,6 +43,10 @@ DO_UNINSTALL=0
 DO_SOURCE=0
 SOURCE_REPO="${ZMUSE_SOURCE_REPO:-https://git.tuxai.org/personal/zmusic.git}"
 SOURCE_ARCHIVE_TMPL="${ZMUSE_SOURCE_ARCHIVE:-}"
+SOURCE_KIND="gitlab"
+SOURCE_SET=0
+GITHUB_REPO="${ZMUSE_GITHUB_REPO:-yuanjingINT/zmusic}"
+GITHUB_ARCHIVE_TMPL="${ZMUSE_GITHUB_ARCHIVE:-}"
 BUILD_LOG="${ZMUSE_BUILD_LOG:-${TMPDIR:-/tmp}/zmuse-build.log}"
 DO_GPG=1
 DO_SIDECAR=1
@@ -71,9 +57,57 @@ die() { printf 'zmuse: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
 
 usage() {
-    awk 'NR == 1 { next }
-         /^set -eu/ { exit }
-         { sub(/^# ?/, ""); print }' "$0" 2>/dev/null || true
+    cat <<'USAGE'
+zmuse installer - one line, no root:
+
+  curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh
+
+Installs a prebuilt static binary into ~/.local/bin (override with --prefix
+or ZMUSE_PREFIX). Nothing outside your home directory is touched, and the
+script never runs sudo. Re-run it to upgrade; --uninstall removes the binary.
+
+Options:
+  --prefix DIR   install into DIR (default ~/.local/bin or $ZMUSE_PREFIX)
+  --version X    install a specific version instead of "latest"
+  --uninstall    remove the binary, sidecar, unit and docs
+  --insecure-sha-only  install without gpg (sha256 from SHA256SUMS still checked)
+  --no-sidecar   do not install the Meting sidecar / systemd user unit
+  --no-ncm       do not install the local NetEase API service
+  --ncm-port N   port for the NetEase API (default 3000)
+  --from-source  build from a release tag locally instead of downloading a tarball
+  --source KIND  with --from-source: gitlab (default) or github
+  --help
+
+--from-source (every distribution, needs a Rust toolchain):
+
+  curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh -s -- --from-source
+  curl -fsSL https://raw.githubusercontent.com/yuanjingINT/zmusic/master/install-static.sh \
+       | sh -s -- --from-source --source github
+
+  Fetch tag v<version> (latest release unless --version is given), run
+  `cargo build --release --locked` in a temporary directory, then install the
+  binary, sidecar, unit and docs exactly like the static route. The source tree
+  is deleted afterwards; only the build log is kept (/tmp/zmuse-build.log).
+
+  --source github downloads the codeload tag archive and never runs git
+  (GitHub's git over HTTPS stalls on some networks). --source gitlab shallow
+  clones the tag; if that fails it tries the GitLab archive, then GitHub.
+
+  Missing build tools are reported with a per-distribution install command; this
+  script never installs them and never runs sudo. Compilation takes 1-3 minutes;
+  the static tarball stays the preferred route.
+
+Download layout (published by the release job):
+  <base>/latest                      plain-text version, atomically replaced
+  <base>/v<ver>/SHA256SUMS           one line per artifact
+  <base>/v<ver>/SHA256SUMS.sig       detached signature of SHA256SUMS
+  <base>/v<ver>/zmuse-<ver>-linux-<arch>.tar.gz
+
+The NetEase source needs a local API service (the npm package
+@neteasecloudmusicapienhanced/api, Node >= 22, listening on 127.0.0.1:3000).
+It is installed into ~/.local/share/ncm-api and run as a systemd --user unit;
+nothing global is touched and the user's npm config is not modified.
+USAGE
     exit 0
 }
 
@@ -86,11 +120,21 @@ while [ $# -gt 0 ]; do
         --no-sidecar) DO_SIDECAR=0; shift ;;
         --no-ncm)     DO_NCM=0; shift ;;
         --ncm-port)   [ $# -ge 2 ] || die "--ncm-port needs a value"; NCM_PORT="$2"; shift 2 ;;
-        --from-source|--source) DO_SOURCE=1; shift ;;
+        --from-source) DO_SOURCE=1; shift ;;
+        --source)     [ $# -ge 2 ] || die "--source needs a value (gitlab or github)"
+                      SOURCE_KIND="$2"; SOURCE_SET=1; shift 2 ;;
         --help|-h)   usage ;;
         *)           die "unknown option: $1 (try --help)" ;;
     esac
 done
+
+case "$SOURCE_KIND" in
+    gitlab|github) ;;
+    *) die "unknown --source: $SOURCE_KIND (gitlab or github)" ;;
+esac
+if [ "$SOURCE_SET" -eq 1 ] && [ "$DO_SOURCE" -ne 1 ]; then
+    die "--source only makes sense together with --from-source"
+fi
 
 # 展开开头的 ~（POSIX：不能用 bash 的 ${VAR/#pat/rep}，dash 会报 Bad substitution）
 case "$PREFIX" in
@@ -172,10 +216,13 @@ p = sys.argv[1]
 src = open(p, encoding='utf-8').read()
 marker = "req.baseUrl === '/song/url/v1'"
 if marker not in src:
-    sys.exit(0)  # 已修补或版本不同
-start = src.find("        // 夹带私货部分")
+    sys.exit(0)  # already patched, or a different upstream version
+# The upstream comment that marks the block; escapes keep this file pure ASCII
+# because dash corrupts non-ASCII bytes inside heredocs.
+MARK = "        // \u5939\u5e26\u79c1\u8d27\u90e8\u5206"
+start = src.find(MARK)
 assert start != -1, 'unblock comment not found'
-# 平衡括号扫描, 找到整个 if 块的结束
+# scan balanced parens to find the end of the whole if block
 i = src.find("if (", start)
 depth = 0
 end = None
@@ -196,7 +243,7 @@ while i < len(src):
         elif c == ')':
             depth -= 1
             if depth == 0:
-                # 到达 if (...) 的结尾
+                # end of the if (...) condition: skip to the closing brace
                 j = src.find('\n', i)
                 end = src.find('\n        }', j)
                 end = src.find('\n        }', end + 9) if end != -1 else -1
@@ -206,7 +253,7 @@ while i < len(src):
     i += 1
 assert end is not None, 'could not find block end'
 
-new_block = '''        // 夹带私货部分：如果开启了通用解锁，并且是获取歌曲URL的接口，则尝试解锁（如果需要的话）ヾ(≧▽≦*)o // batch_unblock_patched
+new_block = '''        // \u5939\u5e26\u79c1\u8d27\u90e8\u5206 (general unlock) // batch_unblock_patched
         if (
           (req.path === '/song/url/v1' || req.baseUrl === '/song/url/v1') &&
           process.env.ENABLE_GENERAL_UNBLOCK === 'true'
@@ -445,7 +492,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/.local/share/zmuse/sidecar
 Environment=METING_PORT=8123
-# 可选：把 cookie 放在这个文件里（600），别写进 unit 正文或仓库
+# Optional: put the cookie in this file (mode 600), not in the unit or the repo
 EnvironmentFile=-%h/.config/zmuse/meting.env
 ExecStart=/usr/bin/env node meting.js
 Restart=on-failure
@@ -456,25 +503,62 @@ WantedBy=default.target
 UNIT
 }
 
+gitlab_archive_url() {
+    if [ -n "$SOURCE_ARCHIVE_TMPL" ]; then
+        printf '%s' "$SOURCE_ARCHIVE_TMPL"
+    else
+        printf 'https://git.tuxai.org/personal/zmusic/-/archive/v%s/zmusic-v%s.tar.gz' \
+            "$VERSION" "$VERSION"
+    fi
+}
+
+github_archive_url() {
+    if [ -n "$GITHUB_ARCHIVE_TMPL" ]; then
+        printf '%s' "$GITHUB_ARCHIVE_TMPL"
+    else
+        printf 'https://codeload.github.com/%s/tar.gz/refs/tags/v%s' "$GITHUB_REPO" "$VERSION"
+    fi
+}
+
+# 下 tag 归档并解到 $TMP/src。GitHub 的顶层是 <repo>-<ver>/、GitLab 是 <repo>-v<ver>/，
+# 都用 --strip-components=1 剥掉一层；失败只返回非 0，让调用方决定回落到哪。
+fetch_archive() {   # $1 = url
+    rm -rf "$TMP/src"
+    curl -fsSL -o "$TMP/src.tar.gz" "$1" >>"$BUILD_LOG" 2>&1 || return 1
+    mkdir -p "$TMP/src"
+    tar -xzf "$TMP/src.tar.gz" -C "$TMP/src" --strip-components=1 >>"$BUILD_LOG" 2>&1 ||
+        { rm -rf "$TMP/src"; return 1; }
+    return 0
+}
+
 # 拉 tag 源码 -> 编译 -> 按静态包的布局暂存到 $PKG；二进制留给 $SRC
 build_from_source() {
     check_source_tools
     : >"$BUILD_LOG"
-    say "  fetching tag v$VERSION"
-    if git clone --quiet --depth 1 --branch "v$VERSION" "$SOURCE_REPO" "$TMP/src" >>"$BUILD_LOG" 2>&1; then
-        say "  cloned $SOURCE_REPO (v$VERSION)"
+    if [ "$SOURCE_KIND" = "github" ]; then
+        gh_url="$(github_archive_url)"
+        say "  fetching tag v$VERSION from GitHub (codeload, no git)"
+        fetch_archive "$gh_url" ||
+            die "could not fetch $gh_url (does tag v$VERSION exist on $GITHUB_REPO?)"
+        say "  unpacked the GitHub archive"
     else
-        rm -rf "$TMP/src"
-        archive="$SOURCE_ARCHIVE_TMPL"
-        [ -n "$archive" ] ||
-            archive="https://git.tuxai.org/personal/zmusic/-/archive/v$VERSION/zmusic-v$VERSION.tar.gz"
-        say "  git clone failed (git.tuxai.org may be restarting), trying the archive"
-        curl -fsSL -o "$TMP/src.tar.gz" "$archive" >>"$BUILD_LOG" 2>&1 ||
-            die "could not fetch the source for v$VERSION: git.tuxai.org did not answer (it returns 502 while its container restarts). Retry later, pass --version, or use the prebuilt install"
-        mkdir -p "$TMP/src"
-        tar -xzf "$TMP/src.tar.gz" -C "$TMP/src" --strip-components=1 ||
-            die "could not unpack the source archive for v$VERSION"
-        say "  unpacked $archive"
+        say "  fetching tag v$VERSION from $SOURCE_REPO"
+        if git clone --quiet --depth 1 --branch "v$VERSION" "$SOURCE_REPO" "$TMP/src" >>"$BUILD_LOG" 2>&1; then
+            say "  cloned $SOURCE_REPO (v$VERSION)"
+        else
+            rm -rf "$TMP/src"
+            gl_url="$(gitlab_archive_url)"
+            say "  git clone failed (git.tuxai.org may be restarting), trying the archive"
+            if fetch_archive "$gl_url"; then
+                say "  unpacked $gl_url"
+            else
+                gh_url="$(github_archive_url)"
+                say "  the GitLab archive failed too, falling back to GitHub"
+                fetch_archive "$gh_url" ||
+                    die "could not fetch the source for v$VERSION from GitLab or GitHub: check the tag exists, pass --version, or use the prebuilt install"
+                say "  unpacked the GitHub archive"
+            fi
+        fi
     fi
 
     tag_ver="$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' "$TMP/src/Cargo.toml" 2>/dev/null || true)"
