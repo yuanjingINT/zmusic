@@ -100,26 +100,9 @@ cp -a sidecar/. "$PKG/sidecar/"
 rm -rf "$PKG/sidecar/node_modules/.cache"
 install -m 644 README.md LICENSE "$PKG/"
 install -m 644 docs/CONFIG.md "$PKG/CONFIG.md"
-# 用户级 unit（静态安装装在家目录，路径和 pacman 包里的 /usr/lib 版本不同）
-cat > "$PKG/zmuse-meting.service" <<'UNIT'
-[Unit]
-Description=Meting sidecar for zmuse (loopback only)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=%h/.local/share/zmuse/sidecar
-Environment=METING_PORT=8123
-# 可选：把 cookie 放在这个文件里（600），别写进 unit 正文或仓库
-EnvironmentFile=-%h/.config/zmuse/meting.env
-ExecStart=/usr/bin/env node meting.js
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-UNIT
+# 用户级 unit（静态安装装在家目录，路径和 pacman 包里的 /usr/lib 版本不同）。
+# 内容放在 packaging/zmuse-meting-user.service：install.sh 的 --from-source 也用这一份。
+install -m 644 packaging/zmuse-meting-user.service "$PKG/zmuse-meting.service"
 
 # 可复现：同样的 commit 两次构建应当逐字节一致。
 #   --sort=name        文件顺序固定
