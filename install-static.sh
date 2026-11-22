@@ -15,7 +15,19 @@
 #   --no-sidecar   do not install the Meting sidecar / systemd user unit
 #   --no-ncm       do not install the local NetEase API service
 #   --ncm-port N   port for the NetEase API (default 3000)
+#   --from-source  build from a release tag locally instead of downloading a tarball
 #   --help
+#
+# --from-source (every distribution, needs a Rust toolchain):
+#   curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh -s -- --from-source
+#
+#   Fetch tag v<version> (latest release unless --version is given), run
+#   `cargo build --release --locked` in a temporary directory, then install the
+#   binary, sidecar, unit and docs exactly like the static route. The source tree
+#   is deleted afterwards; only the build log is kept (/tmp/zmuse-build.log).
+#   Missing build tools are reported with a per-distribution install command; this
+#   script never installs them and never runs sudo. Compilation takes 1-3 minutes;
+#   the static tarball stays the preferred route.
 #
 # The NetEase source needs a local API service (the npm package
 # @neteasecloudmusicapienhanced/api, Node >= 22, listening on 127.0.0.1:3000).
@@ -33,6 +45,9 @@
 #   ZMUSE_INSTALL_BASE  base URL of the download directory
 #   ZMUSE_KEY_URL       the repository public key
 #   ZMUSE_PREFIX        same as --prefix
+#   ZMUSE_SOURCE_REPO   git URL to clone for --from-source
+#   ZMUSE_SOURCE_ARCHIVE  fallback tarball URL used when the clone fails
+#   ZMUSE_BUILD_LOG     build log path (default /tmp/zmuse-build.log)
 set -eu
 
 BASE="${ZMUSE_INSTALL_BASE:-https://repo.dito.asia/zmuse}"
@@ -43,6 +58,10 @@ EXPECTED_FP="6469F0BEB079C3EDCC47947627FEDD0D74F7D714"
 PREFIX="${ZMUSE_PREFIX:-$HOME/.local/bin}"
 VERSION=""
 DO_UNINSTALL=0
+DO_SOURCE=0
+SOURCE_REPO="${ZMUSE_SOURCE_REPO:-https://git.tuxai.org/personal/zmusic.git}"
+SOURCE_ARCHIVE_TMPL="${ZMUSE_SOURCE_ARCHIVE:-}"
+BUILD_LOG="${ZMUSE_BUILD_LOG:-${TMPDIR:-/tmp}/zmuse-build.log}"
 DO_GPG=1
 DO_SIDECAR=1
 DO_NCM=1
@@ -52,7 +71,9 @@ die() { printf 'zmuse: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
 
 usage() {
-    sed -n '2,26p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
+    awk 'NR == 1 { next }
+         /^set -eu/ { exit }
+         { sub(/^# ?/, ""); print }' "$0" 2>/dev/null || true
     exit 0
 }
 
@@ -65,6 +86,7 @@ while [ $# -gt 0 ]; do
         --no-sidecar) DO_SIDECAR=0; shift ;;
         --no-ncm)     DO_NCM=0; shift ;;
         --ncm-port)   [ $# -ge 2 ] || die "--ncm-port needs a value"; NCM_PORT="$2"; shift 2 ;;
+        --from-source|--source) DO_SOURCE=1; shift ;;
         --help|-h)   usage ;;
         *)           die "unknown option: $1 (try --help)" ;;
     esac
@@ -275,6 +297,230 @@ UNIT
     fi
 }
 
+# ---------------------------------------------------------------- from source
+# --from-source 只需要检测工具链并给出安装提示：本脚本不装包、不 sudo。
+src_family() {
+    ids=""
+    if [ -r /etc/os-release ]; then
+        ids="$( . /etc/os-release 2>/dev/null; printf '%s %s' "${ID:-}" "${ID_LIKE:-}" )"
+    fi
+    case "$ids" in
+        *arch*)   printf 'arch' ;;
+        *debian*|*ubuntu*|*linuxmint*|*pop*|*neon*) printf 'debian' ;;
+        *fedora*|*rhel*|*centos*|*rocky*|*alma*)    printf 'fedora' ;;
+        *suse*)                                     printf 'suse' ;;
+        *alpine*)                                   printf 'alpine' ;;
+        *void*)                                     printf 'void' ;;
+        *)                                          printf 'other' ;;
+    esac
+}
+
+# $1 = 工具，$2 = 发行版家族 -> 该发行版里的包名（可能多个）
+src_pkg() {
+    case "$1" in
+        git)  printf 'git' ;;
+        rust) case "$2" in
+                  arch|fedora|suse|alpine|void) printf 'rust' ;;
+                  *)                            printf 'rustc cargo' ;;
+              esac ;;
+        cc)   case "$2" in
+                  debian) printf 'build-essential' ;;
+                  alpine) printf 'build-base' ;;
+                  *)      printf 'gcc' ;;
+              esac ;;
+        pkg-config) case "$2" in
+                  debian) printf 'pkg-config' ;;
+                  fedora) printf 'pkgconf-pkg-config' ;;
+                  alpine) printf 'pkgconf' ;;
+                  *)      printf 'pkg-config' ;;
+              esac ;;
+        openssl) case "$2" in
+                  arch)   printf 'openssl' ;;
+                  fedora|suse) printf 'openssl-devel' ;;
+                  alpine) printf 'openssl-dev' ;;
+                  *)      printf 'libssl-dev' ;;
+              esac ;;
+        make) case "$2" in
+                  debian) printf 'build-essential' ;;
+                  alpine) printf 'build-base' ;;
+                  *)      printf 'make' ;;
+              esac ;;
+    esac
+}
+
+src_install_cmd() {
+    case "$1" in
+        arch)   printf 'sudo pacman -S --needed' ;;
+        debian) printf 'sudo apt install' ;;
+        fedora) printf 'sudo dnf install' ;;
+        suse)   printf 'sudo zypper install' ;;
+        alpine) printf 'sudo apk add' ;;
+        void)   printf 'sudo xbps-install' ;;
+        *)      printf 'install' ;;
+    esac
+}
+
+# A >= B（点分版本，缺的位数按 0 算）
+ver_ge() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        n = split(a, x, "."); m = split(b, y, ".")
+        for (i = 1; i <= 3; i++) {
+            xv = (i <= n ? x[i] : 0) + 0
+            yv = (i <= m ? y[i] : 0) + 0
+            if (xv > yv) exit 0
+            if (xv < yv) exit 1
+        }
+        exit 0
+    }'
+}
+
+check_source_tools() {
+    fam="$(src_family)"
+    missing=""
+    for t in git cargo rustc cc pkg-config make; do
+        case "$t" in
+            cc) command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 ||
+                    missing="$missing cc" ;;
+            *)  command -v "$t" >/dev/null 2>&1 || missing="$missing $t" ;;
+        esac
+    done
+    if command -v pkg-config >/dev/null 2>&1; then
+        pkg-config --exists openssl 2>/dev/null || missing="$missing openssl"
+    elif [ ! -f /usr/include/openssl/ssl.h ]; then
+        missing="$missing openssl"
+    fi
+    [ -n "$missing" ] || return 0
+
+    say ""
+    say "--from-source needs a Rust and a C toolchain. Missing:"
+    pkgs=""
+    for t in $missing; do
+        case "$t" in cargo|rustc) id=rust ;; *) id="$t" ;; esac
+        pk="$(src_pkg "$id" "$fam")"
+        say "  - $t  ->  $pk"
+        for w in $pk; do
+            case " $pkgs " in *" $w "*) ;; *) pkgs="$pkgs $w" ;; esac
+        done
+    done
+    say ""
+    say "Install them yourself (this script installs nothing and never runs sudo):"
+    say "  $(src_install_cmd "$fam")$pkgs"
+    case "$missing" in
+        *cargo*|*rustc*)
+            say ""
+            say "If your distribution's Rust is older than this version needs (see"
+            say "rust-version in Cargo.toml), use rustup instead:"
+            say "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            ;;
+    esac
+    die "missing build tools for --from-source"
+}
+
+check_rust_version() {
+    want="$(awk -F'"' '/^rust-version[[:space:]]*=/{print $2; exit}' "$1/Cargo.toml" 2>/dev/null || true)"
+    [ -n "$want" ] || return 0
+    have="$(rustc --version 2>/dev/null | awk '{print $2}')"
+    ver_ge "$have" "$want" && return 0
+    say ""
+    say "rustc $have is too old: Cargo.toml declares rust-version = $want"
+    say "Update the toolchain:"
+    say "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    die "need rustc >= $want"
+}
+
+# 用户级 unit。仓库里那份是 packaging/zmuse-meting-user.service（build-static 也用它），
+# 这里只在老 tag 没有该文件时兜底；两份内容必须一致。
+write_user_unit() {
+    cat > "$1" <<'UNIT'
+[Unit]
+Description=Meting sidecar for zmuse (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/zmuse/sidecar
+Environment=METING_PORT=8123
+# 可选：把 cookie 放在这个文件里（600），别写进 unit 正文或仓库
+EnvironmentFile=-%h/.config/zmuse/meting.env
+ExecStart=/usr/bin/env node meting.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+UNIT
+}
+
+# 拉 tag 源码 -> 编译 -> 按静态包的布局暂存到 $PKG；二进制留给 $SRC
+build_from_source() {
+    check_source_tools
+    : >"$BUILD_LOG"
+    say "  fetching tag v$VERSION"
+    if git clone --quiet --depth 1 --branch "v$VERSION" "$SOURCE_REPO" "$TMP/src" >>"$BUILD_LOG" 2>&1; then
+        say "  cloned $SOURCE_REPO (v$VERSION)"
+    else
+        rm -rf "$TMP/src"
+        archive="$SOURCE_ARCHIVE_TMPL"
+        [ -n "$archive" ] ||
+            archive="https://git.tuxai.org/personal/zmusic/-/archive/v$VERSION/zmusic-v$VERSION.tar.gz"
+        say "  git clone failed (git.tuxai.org may be restarting), trying the archive"
+        curl -fsSL -o "$TMP/src.tar.gz" "$archive" >>"$BUILD_LOG" 2>&1 ||
+            die "could not fetch the source for v$VERSION: git.tuxai.org did not answer (it returns 502 while its container restarts). Retry later, pass --version, or use the prebuilt install"
+        mkdir -p "$TMP/src"
+        tar -xzf "$TMP/src.tar.gz" -C "$TMP/src" --strip-components=1 ||
+            die "could not unpack the source archive for v$VERSION"
+        say "  unpacked $archive"
+    fi
+
+    tag_ver="$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' "$TMP/src/Cargo.toml" 2>/dev/null || true)"
+    [ "$tag_ver" = "$VERSION" ] ||
+        die "tag v$VERSION declares version '$tag_ver'; refusing to build the wrong thing"
+
+    check_rust_version "$TMP/src"
+
+    say "  building with cargo (1-3 minutes; log: $BUILD_LOG)"
+    started=$(date +%s)
+    if ! ( cd "$TMP/src" && CARGO_TARGET_DIR="$TMP/src/target" \
+               cargo build --release --locked ) >>"$BUILD_LOG" 2>&1; then
+        say ""
+        say "the build failed. full log: $BUILD_LOG"
+        tail -n 25 "$BUILD_LOG" 2>/dev/null | sed 's/^/    /'
+        die "cargo build failed for v$VERSION"
+    fi
+    say "  built in $(( $(date +%s) - started ))s"
+    say "  note: a source build is not signature-checked (HTTPS + tag only)"
+
+    PKG="$TMP/pkg"
+    mkdir -p "$PKG"
+    # v0.1.1（改名前）编出来的是 release/zmusic，两个名字都认
+    bin=""
+    for cand in "$TMP/src/target/release/zmuse" "$TMP/src/target/release/zmusic"; do
+        if [ -x "$cand" ]; then bin="$cand"; break; fi
+    done
+    [ -n "$bin" ] || die "the build produced no binary in target/release (see $BUILD_LOG)"
+    install -m 755 "$bin" "$PKG/zmuse"
+    if [ -d "$TMP/src/sidecar" ]; then
+        mkdir -p "$PKG/sidecar"
+        cp -a "$TMP/src/sidecar/." "$PKG/sidecar/"
+        rm -rf "$PKG/sidecar/node_modules/.cache"
+    fi
+    for f in README.md LICENSE; do
+        if [ -f "$TMP/src/$f" ]; then install -m 644 "$TMP/src/$f" "$PKG/$f"; fi
+    done
+    if [ -f "$TMP/src/docs/CONFIG.md" ]; then
+        install -m 644 "$TMP/src/docs/CONFIG.md" "$PKG/CONFIG.md"
+    fi
+    if [ -f "$TMP/src/packaging/zmuse-meting-user.service" ]; then
+        install -m 644 "$TMP/src/packaging/zmuse-meting-user.service" "$PKG/zmuse-meting.service"
+    else
+        # 老 tag（prequel：unit 还没进仓库）也装上同样的 unit，别让侧车没服务文件
+        write_user_unit "$PKG/zmuse-meting.service"
+    fi
+    SRC="$PKG/zmuse"
+    rm -rf "$TMP/src/target"
+}
+
 # ---------------------------------------------------------------- uninstall
 if [ "$DO_UNINSTALL" -eq 1 ]; then
     if [ -e "$BIN" ]; then
@@ -291,7 +537,7 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
         command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/null 2>&1 || true
         say "removed the Meting sidecar unit"
     fi
-    rm -rf "$HOME/.local/share/zmuse"
+    rm -rf "$HOME/.local/share/zmuse" "$HOME/.local/share/doc/zmuse"
     NCM_UNIT_U="$HOME/.config/systemd/user/ncm-api.service"
     NCM_DIR_U="$HOME/.local/share/ncm-api"
     if [ -f "$NCM_DIR_U/.zmuse-installed" ]; then
@@ -338,57 +584,63 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 
 say "zmuse $VERSION ($ARCH) -> $PREFIX"
 
-# ---------------------------------------------------------------- checksum list
-# 先拿 SHA256SUMS 和它的签名：清单是被签名的那一份，tarball 的哈希只从清单里取。
-curl -fsSL -o "$TMP/SHA256SUMS" "$VDIR/SHA256SUMS" ||
-    die "could not fetch $VDIR/SHA256SUMS"
-WANT="$(awk -v f="$TARBALL" '$2 == f || $2 == "*"f {print $1; exit}' "$TMP/SHA256SUMS")"
-[ -n "$WANT" ] || die "$TARBALL is not listed in SHA256SUMS (unknown version $VERSION for $ARCH?)"
+if [ "$DO_SOURCE" -eq 1 ]; then
+    # 源码模式：拉 tag、本地编译；没有 tarball 可验签，安全边界是 HTTPS + tag
+    build_from_source
+else
+    PKG="$TMP/$NAME"
+    # ---------------------------------------------------------------- checksum list
+    # 先拿 SHA256SUMS 和它的签名：清单是被签名的那一份，tarball 的哈希只从清单里取。
+    curl -fsSL -o "$TMP/SHA256SUMS" "$VDIR/SHA256SUMS" ||
+        die "could not fetch $VDIR/SHA256SUMS"
+    WANT="$(awk -v f="$TARBALL" '$2 == f || $2 == "*"f {print $1; exit}' "$TMP/SHA256SUMS")"
+    [ -n "$WANT" ] || die "$TARBALL is not listed in SHA256SUMS (unknown version $VERSION for $ARCH?)"
 
-# ---------------------------------------------------------------- signature
-if [ "$DO_GPG" -eq 1 ]; then
-    if ! command -v gpg >/dev/null 2>&1; then
-        die "gpg is required to verify the signature; install gnupg, or pass --insecure-sha-only"
+    # ---------------------------------------------------------------- signature
+    if [ "$DO_GPG" -eq 1 ]; then
+        if ! command -v gpg >/dev/null 2>&1; then
+            die "gpg is required to verify the signature; install gnupg, or pass --insecure-sha-only"
+        fi
+        curl -fsSL -o "$TMP/SHA256SUMS.sig" "$VDIR/SHA256SUMS.sig" ||
+            die "signature SHA256SUMS.sig is missing; refusing to install unverified (use --insecure-sha-only)"
+        curl -fsSL -o "$TMP/repo.pub" "$KEY_URL" ||
+            die "could not fetch the repository key from $KEY_URL"
+        # Throwaway keyring: the user's ~/.gnupg is never modified.
+        export GNUPGHOME="$TMP/gnupg"
+        mkdir -p "$GNUPGHOME"
+        chmod 700 "$GNUPGHOME"
+        gpg --batch --quiet --import "$TMP/repo.pub" >/dev/null 2>&1 ||
+            die "could not import the repository key"
+        FPS="$(gpg --batch --with-colons --fingerprint 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')"
+        [ "$FPS" = "$EXPECTED_FP" ] ||
+            die "repository key fingerprint mismatch: got $FPS, expected $EXPECTED_FP"
+        gpg --batch --quiet --verify "$TMP/SHA256SUMS.sig" "$TMP/SHA256SUMS" >/dev/null 2>&1 ||
+            die "signature verification failed for SHA256SUMS"
+        say "  signature ok ($EXPECTED_FP)"
+    else
+        say "  WARNING: signature check skipped (--insecure-sha-only)"
     fi
-    curl -fsSL -o "$TMP/SHA256SUMS.sig" "$VDIR/SHA256SUMS.sig" ||
-        die "signature SHA256SUMS.sig is missing; refusing to install unverified (use --insecure-sha-only)"
-    curl -fsSL -o "$TMP/repo.pub" "$KEY_URL" ||
-        die "could not fetch the repository key from $KEY_URL"
-    # Throwaway keyring: the user's ~/.gnupg is never modified.
-    export GNUPGHOME="$TMP/gnupg"
-    mkdir -p "$GNUPGHOME"
-    chmod 700 "$GNUPGHOME"
-    gpg --batch --quiet --import "$TMP/repo.pub" >/dev/null 2>&1 ||
-        die "could not import the repository key"
-    FPS="$(gpg --batch --with-colons --fingerprint 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')"
-    [ "$FPS" = "$EXPECTED_FP" ] ||
-        die "repository key fingerprint mismatch: got $FPS, expected $EXPECTED_FP"
-    gpg --batch --quiet --verify "$TMP/SHA256SUMS.sig" "$TMP/SHA256SUMS" >/dev/null 2>&1 ||
-        die "signature verification failed for SHA256SUMS"
-    say "  signature ok ($EXPECTED_FP)"
-else
-    say "  WARNING: signature check skipped (--insecure-sha-only)"
+
+    # ---------------------------------------------------------------- download
+    say "  downloading $TARBALL"
+    curl -fsSL -o "$TMP/$TARBALL" "$VDIR/$TARBALL" || die "download failed: $VDIR/$TARBALL"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        GOT="$(sha256sum "$TMP/$TARBALL" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        GOT="$(shasum -a 256 "$TMP/$TARBALL" | awk '{print $1}')"
+    else
+        die "no sha256 tool (need sha256sum or shasum)"
+    fi
+    [ "$GOT" = "$WANT" ] || die "sha256 mismatch: expected $WANT, got $GOT"
+    say "  sha256 ok"
+
+    # ---------------------------------------------------------------- install
+    tar -xzf "$TMP/$TARBALL" -C "$TMP" || die "could not unpack $TARBALL"
+    SRC="$PKG/zmuse"
+    [ -f "$SRC" ] || SRC="$(find "$PKG" -maxdepth 2 -name zmuse -type f 2>/dev/null | head -1)"
+    [ -n "${SRC:-}" ] && [ -f "$SRC" ] || die "no zmuse binary inside $TARBALL"
 fi
-
-# ---------------------------------------------------------------- download
-say "  downloading $TARBALL"
-curl -fsSL -o "$TMP/$TARBALL" "$VDIR/$TARBALL" || die "download failed: $VDIR/$TARBALL"
-
-if command -v sha256sum >/dev/null 2>&1; then
-    GOT="$(sha256sum "$TMP/$TARBALL" | awk '{print $1}')"
-elif command -v shasum >/dev/null 2>&1; then
-    GOT="$(shasum -a 256 "$TMP/$TARBALL" | awk '{print $1}')"
-else
-    die "no sha256 tool (need sha256sum or shasum)"
-fi
-[ "$GOT" = "$WANT" ] || die "sha256 mismatch: expected $WANT, got $GOT"
-say "  sha256 ok"
-
-# ---------------------------------------------------------------- install
-tar -xzf "$TMP/$TARBALL" -C "$TMP" || die "could not unpack $TARBALL"
-SRC="$TMP/$NAME/zmuse"
-[ -f "$SRC" ] || SRC="$(find "$TMP/$NAME" -maxdepth 2 -name zmuse -type f 2>/dev/null | head -1)"
-[ -n "${SRC:-}" ] && [ -f "$SRC" ] || die "no zmuse binary inside $TARBALL"
 
 mkdir -p "$PREFIX"
 if [ -e "$BIN" ]; then
@@ -411,13 +663,13 @@ esac
 # ---------------------------------------------------------------- sidecar + docs
 SIDE_DST="$HOME/.local/share/zmuse/sidecar"
 UNIT_DST="$HOME/.config/systemd/user/zmuse-meting.service"
-if [ "$DO_SIDECAR" -eq 1 ] && [ -f "$TMP/$NAME/sidecar/meting.js" ]; then
+if [ "$DO_SIDECAR" -eq 1 ] && [ -f "$PKG/sidecar/meting.js" ]; then
     mkdir -p "$SIDE_DST"
-    cp -a "$TMP/$NAME/sidecar/." "$SIDE_DST/"
+    cp -a "$PKG/sidecar/." "$SIDE_DST/"
     say "  sidecar -> $SIDE_DST"
-    if [ -f "$TMP/$NAME/zmuse-meting.service" ]; then
+    if [ -f "$PKG/zmuse-meting.service" ]; then
         mkdir -p "$(dirname "$UNIT_DST")"
-        install -m 644 "$TMP/$NAME/zmuse-meting.service" "$UNIT_DST"
+        install -m 644 "$PKG/zmuse-meting.service" "$UNIT_DST"
         say "  unit    -> $UNIT_DST"
     fi
     if command -v systemctl >/dev/null 2>&1; then
@@ -437,9 +689,9 @@ fi
 # 文档和许可证
 DOC_DST="$HOME/.local/share/doc/zmuse"
 for f in README.md CONFIG.md LICENSE; do
-    if [ -f "$TMP/$NAME/$f" ]; then
+    if [ -f "$PKG/$f" ]; then
         mkdir -p "$DOC_DST"
-        install -m 644 "$TMP/$NAME/$f" "$DOC_DST/$f"
+        install -m 644 "$PKG/$f" "$DOC_DST/$f"
     fi
 done
 

@@ -2,6 +2,8 @@
 name = "zmuse"
 version = "0.1.1"
 edition = "2021"
+# --from-source checks this before building; 1.88 is the floor of our dependency tree
+rust-version = "1.88"
 description = "zmuse - NetEase Cloud Music terminal player for Linux"
 
 [[bin]]

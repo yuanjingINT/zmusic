@@ -26,6 +26,24 @@ UI 偏好（播放顺序、上次选的源、下载位置）存在 `~/.config/zm
 `ZMUSIC_*`（`NCM_*` 那几个没改名）。Arch 包里带 `replaces=(zmusic)`/`conflicts=(zmusic)`，
 `pacman -Syu` 会自动换掉旧包。
 
+## 从源码安装（`--from-source`）
+
+不想用静态包时可以本地编译，所有发行版通用，同一条安装命令加一个开关：
+
+```bash
+curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh -s -- --from-source
+```
+
+- 需要 Rust 工具链（`rustc` ≥ `Cargo.toml` 里的 `rust-version`，现在是 1.88）、C 编译器、
+  `pkg-config`、OpenSSL 头文件、`make`。脚本只**检测**，缺哪个按发行版打印安装命令，
+  不自己装、不 sudo。
+- 默认取最新 release tag（`--version 0.1.1` 可指定，不跟 master），在临时目录
+  `cargo build --release --locked`，装完只留产物，源码目录会删掉。
+- 装的位置和静态包一样：`~/.local/bin/zmuse`、`~/.local/share/zmuse/sidecar`、
+  `~/.config/systemd/user/zmuse-meting.service`、文档；`--uninstall`、`--no-ncm` 行为一致。
+- 编译 1–3 分钟；失败时日志留在 `/tmp/zmuse-build.log`（`ZMUSE_BUILD_LOG` 可改）。
+- **静态包仍是首选**：不用工具链、一条命令下完，也带签名校验。
+
 ## 启用了哪些源（`[sources] enabled`）
 
 **默认只有网易云。** 其它源都编译在二进制里，但默认不注册、不探测、不出现在源列表里，

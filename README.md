@@ -99,17 +99,35 @@ should prefer `dito-repo` above.
 
 ### From source
 
-The main repo is on GitLab; GitHub is a mirror:
+Needs a Rust toolchain (`rustc` >= the `rust-version` in `Cargo.toml`, 1.88
+right now), a C compiler, `pkg-config`, OpenSSL headers and `make`. Compiling
+takes 1–3 minutes; the static tarball stays the preferred route.
+
+The install script can build it for you — same target layout, same sidecar, same
+user unit, same `--uninstall` as the prebuilt route:
 
 ```bash
-git clone https://git.tuxai.org/personal/zmuse.git
-cd zmuse
+curl -fsSL https://repo.dito.asia/zmuse/install.sh | sh -s -- --from-source
+```
+
+It fetches the latest release tag (`--version 0.1.1` pins one; `master` is never
+built implicitly), runs `cargo build --release --locked` in a temporary
+directory, installs the binary, the Meting sidecar, the unit and the docs, then
+deletes the source tree. If the build fails, the log stays at
+`/tmp/zmuse-build.log` (override with `ZMUSE_BUILD_LOG`). Missing build tools are
+reported with a per-distribution install command — the script installs nothing
+itself and never runs `sudo`.
+
+Or do it by hand — the main repo is on GitLab, GitHub is a mirror:
+
+```bash
+git clone https://git.tuxai.org/personal/zmusic.git
+cd zmusic
 cargo build --release --locked
 ./target/release/zmuse
 ```
 
-Install the build dependencies first (missing OpenSSL headers show up as
-`openssl-sys` / `Could not find openssl`):
+Missing OpenSSL headers show up as `openssl-sys` / `Could not find openssl`:
 
 ```bash
 # Arch
