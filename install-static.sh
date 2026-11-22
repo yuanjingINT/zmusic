@@ -92,7 +92,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-PREFIX="${PREFIX/#\~/$HOME}"
+# 展开开头的 ~（POSIX：不能用 bash 的 ${VAR/#pat/rep}，dash 会报 Bad substitution）
+case "$PREFIX" in
+    "~")   PREFIX="$HOME" ;;
+    "~/"*) PREFIX="$HOME/${PREFIX#??}" ;;
+esac
 BIN="$PREFIX/zmuse"
 
 # ---------------------------------------------------------------- NetEase API
